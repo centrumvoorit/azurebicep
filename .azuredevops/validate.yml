@@ -1,0 +1,44 @@
+trigger: none
+
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - infra/*
+      - bicepconfig.json
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+strategy:
+  matrix:
+    dev:
+      envFile: 'main.dev.bicepparam'
+    acc:
+      envFile: 'main.acc.bicepparam'
+    prod:
+      envFile: 'main.prod.bicepparam'
+
+steps:
+  - task: AzureCLI@2
+    displayName: 'Bicep Build'
+    inputs:
+      azureSubscription: '$(azureServiceConnection)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az bicep build --file infra/main.bicep
+
+  - task: AzureCLI@2
+    displayName: 'What-If $(envFile)'
+    inputs:
+      azureSubscription: '$(azureServiceConnection)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az deployment sub what-if \
+          --location westeurope \
+          --template-file infra/main.bicep \
+          --parameters infra/$(envFile)
