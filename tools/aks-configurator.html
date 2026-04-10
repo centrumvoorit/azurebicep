@@ -1943,14 +1943,512 @@ function renderStep6() {
   return html;
 }
 function renderStep7() {
-  return '<h2 class="text-xl font-bold text-gray-800 mb-4">Step 7: Review &amp; Generate</h2><p class="text-gray-500">Coming in next build...</p>';
+  var s = getFlatState();
+  var validation = validateAllSteps();
+
+  var html = '<h2 class="text-xl font-bold text-gray-800 mb-1">Step 7: Review &amp; Generate</h2>' +
+    '<p class="text-sm text-gray-500 mb-6">Review your configuration and download deployment files.</p>';
+
+  // Architecture visual
+  html += renderArchitectureVisual(s);
+
+  // Validation panel
+  html += '<div class="mt-6">';
+  html += '<h3 class="text-base font-semibold text-gray-700 mb-3">Validation</h3>';
+  if (validation.errors.length > 0) {
+    var errItems = '';
+    for (var i = 0; i < validation.errors.length; i++) {
+      errItems += '<li>' + escapeHtml(validation.errors[i]) + '</li>';
+    }
+    html += '<div class="bg-red-50 border border-red-200 rounded-lg p-3 mb-3">' +
+      '<h4 class="text-sm font-semibold text-red-700 mb-1">Errors</h4>' +
+      '<ul class="text-sm text-red-600 list-disc list-inside">' + errItems + '</ul></div>';
+  }
+  if (validation.warnings.length > 0) {
+    var warnItems = '';
+    for (var i = 0; i < validation.warnings.length; i++) {
+      warnItems += '<li>' + escapeHtml(validation.warnings[i]) + '</li>';
+    }
+    html += '<div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3">' +
+      '<h4 class="text-sm font-semibold text-yellow-700 mb-1">Warnings</h4>' +
+      '<ul class="text-sm text-yellow-600 list-disc list-inside">' + warnItems + '</ul></div>';
+  }
+  if (validation.errors.length === 0 && validation.warnings.length === 0) {
+    html += '<div class="bg-green-50 border border-green-200 rounded-lg p-3 mb-3">' +
+      '<p class="text-sm text-green-700 font-medium">All validations passed. Your configuration is ready to generate.</p></div>';
+  }
+  html += '</div>';
+
+  // Security posture summary
+  html += '<details class="mt-6 border border-gray-200 rounded-lg">' +
+    '<summary class="px-4 py-3 text-base font-semibold text-gray-700 cursor-pointer hover:bg-gray-50 select-none">Security Posture Summary</summary>' +
+    '<div class="px-4 pb-4">' +
+    '<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">';
+
+  var secItems = [
+    { label: 'Azure RBAC', value: 'Enabled', on: true },
+    { label: 'Local Accounts', value: 'Disabled', on: true },
+    { label: 'Workload Identity', value: 'Enabled', on: true },
+    { label: 'OIDC Issuer', value: 'Enabled', on: true },
+    { label: 'Private Cluster', value: s.enablePrivateCluster ? 'Yes' : 'No', on: s.enablePrivateCluster },
+    { label: 'Private Endpoints', value: s.enablePrivateCluster ? 'Enabled' : 'Disabled', on: s.enablePrivateCluster },
+    { label: 'Network Policy', value: 'Azure', on: true },
+    { label: 'Key Vault', value: s.deployKeyVault ? 'Enabled' : 'Disabled', on: s.deployKeyVault }
+  ];
+  for (var i = 0; i < secItems.length; i++) {
+    var si = secItems[i];
+    var secBg = si.on ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500';
+    html += '<div class="' + secBg + ' rounded-lg p-3 text-center">' +
+      '<div class="text-xs font-medium">' + escapeHtml(si.label) + '</div>' +
+      '<div class="text-sm font-semibold mt-1">' + escapeHtml(si.value) + '</div></div>';
+  }
+  html += '</div></div></details>';
+
+  // Generate file contents
+  var bicepContent = generateBicepParam(s);
+  var guideContent = generateDeploymentGuide(s);
+  var env = s.environment || 'dev';
+  var bicepFilename = 'main.' + env + '.bicepparam';
+  var guideFilename = 'deployment-guide-' + (s.customerName || 'unnamed') + '-' + env + '.md';
+
+  // .bicepparam preview
+  html += '<div class="mt-6">' +
+    '<div class="flex items-center justify-between mb-2">' +
+      '<h3 class="text-base font-semibold text-gray-700">.bicepparam Preview</h3>' +
+      '<div class="flex gap-2">' +
+        '<button onclick="copyToClipboard(generateBicepParam(getFlatState()))" class="px-3 py-1 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50">Copy</button>' +
+        '<button onclick="downloadFile(\'' + escapeHtml(bicepFilename) + '\', generateBicepParam(getFlatState()))" class="px-3 py-1 text-xs rounded border border-blue-300 text-blue-600 hover:bg-blue-50">Download</button>' +
+      '</div>' +
+    '</div>' +
+    '<pre class="bg-gray-900 text-green-400 rounded-lg p-4 text-xs font-mono overflow-x-auto max-h-96 overflow-y-auto">' + escapeHtml(bicepContent) + '</pre>' +
+  '</div>';
+
+  // Deployment guide preview
+  html += '<div class="mt-6">' +
+    '<div class="flex items-center justify-between mb-2">' +
+      '<h3 class="text-base font-semibold text-gray-700">Deployment Guide Preview</h3>' +
+      '<div class="flex gap-2">' +
+        '<button onclick="copyToClipboard(generateDeploymentGuide(getFlatState()))" class="px-3 py-1 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50">Copy</button>' +
+        '<button onclick="downloadFile(\'' + escapeHtml(guideFilename) + '\', generateDeploymentGuide(getFlatState()))" class="px-3 py-1 text-xs rounded border border-blue-300 text-blue-600 hover:bg-blue-50">Download</button>' +
+      '</div>' +
+    '</div>' +
+    '<pre class="bg-gray-50 border border-gray-200 rounded-lg p-4 text-xs font-mono overflow-x-auto max-h-96 overflow-y-auto text-gray-800">' + escapeHtml(guideContent) + '</pre>' +
+  '</div>';
+
+  // Download All button
+  html += '<div class="mt-6 text-center">' +
+    '<button onclick="downloadFile(\'' + escapeHtml(bicepFilename) + '\', generateBicepParam(getFlatState())); setTimeout(function(){ downloadFile(\'' + escapeHtml(guideFilename) + '\', generateDeploymentGuide(getFlatState())); }, 500);" ' +
+    'class="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium text-sm">' +
+    'Download All Files</button>' +
+  '</div>';
+
+  return html;
 }
 
 // ============================================================
-// GENERATORS (stubs for future steps)
+// ARCHITECTURE VISUAL
 // ============================================================
 
-// Placeholder for bicepparam generation - implemented in later tasks.
+function renderArchitectureVisual(s) {
+  var rgName = 'rg-' + (s.customerName || '{name}') + '-' + (s.environment || '{env}') + '-' + (s.location || '{region}');
+  var aksName = 'aks-' + (s.customerName || '{name}') + '-' + (s.environment || '{env}');
+  var vnetName = 'vnet-' + (s.customerName || '{name}') + '-' + (s.environment || '{env}');
+  var acrName = 'acr' + (s.customerName || '{name}').replace(/-/g, '') + (s.environment || '{env}');
+
+  var tools = s.ecosystemTools || {};
+  var selectedTools = [];
+  var catKeys = Object.keys(ECOSYSTEM_TOOLS);
+  for (var ci = 0; ci < catKeys.length; ci++) {
+    var catTools = ECOSYSTEM_TOOLS[catKeys[ci]].tools;
+    for (var ti = 0; ti < catTools.length; ti++) {
+      if (tools[catTools[ti].id]) selectedTools.push(catTools[ti].label);
+    }
+  }
+
+  function item(label, enabled) {
+    var cls = enabled ? 'text-green-700 bg-green-50' : 'text-gray-400 bg-gray-50';
+    return '<div class="' + cls + ' rounded px-2 py-1 text-xs font-mono">' + escapeHtml(label) + '</div>';
+  }
+
+  var html = '<div class="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">' +
+    '<h3 class="text-base font-semibold text-gray-700 mb-3">Architecture Overview</h3>' +
+    '<div class="font-mono text-sm">';
+
+  // Resource group
+  html += '<div class="border border-gray-300 rounded-lg p-3">' +
+    '<div class="text-xs font-semibold text-gray-500 mb-2">Resource Group: ' + escapeHtml(rgName) + '</div>';
+
+  // VNet
+  html += '<div class="border border-blue-200 rounded-lg p-3 mb-2 bg-blue-50">' +
+    '<div class="text-xs font-semibold text-blue-700 mb-2">VNet: ' + escapeHtml(vnetName) + ' (' + escapeHtml(s.vnetAddressPrefix || '?') + ')</div>' +
+    '<div class="grid grid-cols-1 md:grid-cols-3 gap-2">' +
+    item('AKS Subnet: ' + (s.aksSubnetPrefix || '?'), true) +
+    item('Services Subnet: ' + (s.servicesSubnetPrefix || '?'), true) +
+    item('PE Subnet: ' + (s.privateEndpointSubnetPrefix || '?'), s.enablePrivateCluster) +
+    '</div></div>';
+
+  // AKS cluster
+  var sysCount = s.systemAutoscaling ? s.systemNodeMinCount + '-' + s.systemNodeMaxCount : s.systemNodeCount;
+  var userCount = s.userAutoscaling ? s.userNodeMinCount + '-' + s.userNodeMaxCount : s.userNodeCount;
+  html += '<div class="border border-purple-200 rounded-lg p-3 mb-2 bg-purple-50">' +
+    '<div class="text-xs font-semibold text-purple-700 mb-2">AKS: ' + escapeHtml(aksName) + ' (v' + escapeHtml(s.kubernetesVersion || '?') + ')</div>' +
+    '<div class="grid grid-cols-1 md:grid-cols-2 gap-2">' +
+    item('System Pool: ' + sysCount + ' x ' + (s.systemNodeVmSize || '?'), true) +
+    item('User Pool: ' + userCount + ' x ' + (s.userNodeVmSize || '?'), true) +
+    '</div></div>';
+
+  // Platform services
+  html += '<div class="grid grid-cols-1 md:grid-cols-3 gap-2 mb-2">' +
+    item('ACR: ' + acrName + ' (' + (s.acrSku || 'Standard') + ')', s.deployAcr) +
+    item('Key Vault (' + (s.keyVaultSku || 'standard') + ')', s.deployKeyVault) +
+    item('Monitoring (retention: ' + (s.logRetentionDays || 30) + 'd)', s.deployMonitoring) +
+    '</div>';
+
+  // Ecosystem tools
+  if (selectedTools.length > 0) {
+    html += '<div class="border border-orange-200 rounded-lg p-3 bg-orange-50">' +
+      '<div class="text-xs font-semibold text-orange-700 mb-2">Ecosystem Tools</div>' +
+      '<div class="flex flex-wrap gap-2">';
+    for (var i = 0; i < selectedTools.length; i++) {
+      html += item(selectedTools[i], true);
+    }
+    html += '</div></div>';
+  }
+
+  html += '</div>'; // end resource group
+  html += '</div></div>'; // end font-mono, end card
+
+  return html;
+}
+
+// ============================================================
+// GENERATORS
+// ============================================================
+
+function bicepString(value) {
+  if (value === null || value === undefined) return "''";
+  var str = String(value);
+  str = str.replace(/'/g, "''");
+  return "'" + str + "'";
+}
+
+function generateBicepParam(s) {
+  var lines = [];
+  lines.push("using 'main.bicep'");
+  lines.push('');
+  lines.push('param customerName = ' + bicepString(s.customerName || ''));
+  lines.push('param environment = ' + bicepString(s.environment || 'dev'));
+  lines.push('param location = ' + bicepString(s.location || 'westeurope'));
+  lines.push('');
+
+  // Tags
+  lines.push('param tags = {');
+  lines.push('  CostCenter: ' + bicepString(s.tagCostCenter || ''));
+  lines.push('  Owner: ' + bicepString(s.tagOwner || ''));
+  lines.push('  Project: ' + bicepString(s.tagProject || ''));
+  var customTags = s.customTags || [];
+  for (var i = 0; i < customTags.length; i++) {
+    var ct = customTags[i];
+    if (ct.key && ct.key.trim()) {
+      lines.push('  ' + ct.key.trim() + ': ' + bicepString(ct.value || ''));
+    }
+  }
+  lines.push('}');
+  lines.push('');
+
+  // Features
+  lines.push('param features = {');
+  lines.push('  deployAcr: ' + (s.deployAcr ? 'true' : 'false'));
+  lines.push('  deployKeyVault: ' + (s.deployKeyVault ? 'true' : 'false'));
+  lines.push('  deployMonitoring: ' + (s.deployMonitoring ? 'true' : 'false'));
+  lines.push('}');
+  lines.push('');
+
+  // Network config
+  lines.push('param networkConfig = {');
+  lines.push('  vnetAddressPrefix: ' + bicepString(s.vnetAddressPrefix || ''));
+  lines.push('  aksSubnetPrefix: ' + bicepString(s.aksSubnetPrefix || ''));
+  lines.push('  servicesSubnetPrefix: ' + bicepString(s.servicesSubnetPrefix || ''));
+  lines.push('  privateEndpointSubnetPrefix: ' + bicepString(s.privateEndpointSubnetPrefix || ''));
+  lines.push('}');
+  lines.push('');
+
+  // AKS config
+  var systemCount = s.systemAutoscaling ? (s.systemNodeMinCount || 1) : (s.systemNodeCount || 1);
+  var userCount = s.userAutoscaling ? (s.userNodeMinCount || 1) : (s.userNodeCount || 1);
+
+  lines.push('param aksConfig = {');
+  lines.push('  kubernetesVersion: ' + bicepString(s.kubernetesVersion || '1.30'));
+  lines.push('  systemNodeCount: ' + systemCount);
+  lines.push('  systemNodeVmSize: ' + bicepString(s.systemNodeVmSize || 'Standard_D4s_v5'));
+  lines.push('  userNodeCount: ' + userCount);
+  lines.push('  userNodeVmSize: ' + bicepString(s.userNodeVmSize || 'Standard_D8s_v5'));
+  lines.push('  enablePrivateCluster: ' + (s.enablePrivateCluster ? 'true' : 'false'));
+  lines.push('}');
+  lines.push('');
+
+  // Admin group object IDs
+  var ids = s.adminGroupObjectIds || [];
+  var validIds = [];
+  for (var i = 0; i < ids.length; i++) {
+    var id = (ids[i] || '').trim();
+    if (id) validIds.push(id);
+  }
+  lines.push('param adminGroupObjectIds = [');
+  for (var i = 0; i < validIds.length; i++) {
+    lines.push('  ' + bicepString(validIds[i]));
+  }
+  lines.push(']');
+  lines.push('');
+
+  // ACR SKU
+  lines.push('param acrSku = ' + bicepString(s.acrSku || 'Standard'));
+
+  // Key Vault SKU
+  lines.push('param keyVaultSku = ' + bicepString(s.keyVaultSku || 'standard'));
+
+  // Log retention
+  lines.push('param logRetentionDays = ' + (s.logRetentionDays || 30));
+
+  // Additional role assignments (only if non-empty)
+  var roles = s.additionalRoleAssignments || [];
+  var validRoles = [];
+  for (var i = 0; i < roles.length; i++) {
+    var r = roles[i];
+    if (r.principalId && r.principalId.trim() && r.roleDefinitionId && r.roleDefinitionId.trim()) {
+      validRoles.push(r);
+    }
+  }
+  if (validRoles.length > 0) {
+    lines.push('');
+    lines.push('param additionalRoleAssignments = [');
+    for (var i = 0; i < validRoles.length; i++) {
+      var vr = validRoles[i];
+      lines.push('  {');
+      lines.push('    principalId: ' + bicepString(vr.principalId.trim()));
+      lines.push('    roleDefinitionId: ' + bicepString(vr.roleDefinitionId.trim()));
+      lines.push('    principalType: ' + bicepString(vr.principalType || 'ServicePrincipal'));
+      lines.push('  }');
+    }
+    lines.push(']');
+  }
+
+  return lines.join('\n') + '\n';
+}
+
+function generateDeploymentGuide(s) {
+  var rgName = 'rg-' + (s.customerName || '{name}') + '-' + (s.environment || '{env}') + '-' + (s.location || '{region}');
+  var aksName = 'aks-' + (s.customerName || '{name}') + '-' + (s.environment || '{env}');
+  var env = s.environment || 'dev';
+  var region = s.location || 'westeurope';
+
+  var lines = [];
+  lines.push('# AKS Deployment Guide');
+  lines.push('');
+  lines.push('- **Environment:** ' + env);
+  lines.push('- **Region:** ' + region);
+  lines.push('- **Cluster type:** ' + (s.enablePrivateCluster ? 'Private' : 'Public'));
+  lines.push('');
+
+  // Prerequisites
+  lines.push('## Prerequisites');
+  lines.push('');
+  lines.push('- Azure CLI installed (`az --version`)');
+  lines.push('- Bicep CLI installed (`az bicep version`)');
+  lines.push('- Sufficient permissions to create resources at subscription scope');
+  lines.push('- `kubectl` installed for cluster management');
+  if (s.enablePrivateCluster) {
+    lines.push('- VPN or private network access to the VNet (private cluster)');
+  }
+  lines.push('');
+
+  // Deploy command
+  lines.push('## Deploy');
+  lines.push('');
+  lines.push('```bash');
+  lines.push('az deployment sub create \\');
+  lines.push('  --location ' + region + ' \\');
+  lines.push('  --template-file infra/main.bicep \\');
+  lines.push('  --parameters infra/main.' + env + '.bicepparam');
+  lines.push('```');
+  lines.push('');
+
+  // Connect
+  lines.push('## Connect to Cluster');
+  lines.push('');
+  lines.push('```bash');
+  lines.push('az aks get-credentials --resource-group ' + rgName + ' --name ' + aksName);
+  lines.push('```');
+  lines.push('');
+
+  // Authorized IPs for public cluster
+  var authIPs = s.apiServerAuthorizedIPs || [];
+  var validIPs = [];
+  for (var i = 0; i < authIPs.length; i++) {
+    var ip = (authIPs[i] || '').trim();
+    if (ip) validIPs.push(ip);
+  }
+  if (!s.enablePrivateCluster && validIPs.length > 0) {
+    lines.push('## Configure Authorized IP Ranges');
+    lines.push('');
+    lines.push('```bash');
+    lines.push('az aks update \\');
+    lines.push('  --resource-group ' + rgName + ' \\');
+    lines.push('  --name ' + aksName + ' \\');
+    lines.push('  --api-server-authorized-ip-ranges ' + validIPs.join(','));
+    lines.push('```');
+    lines.push('');
+  }
+
+  // Upgrade channel
+  var upgradeChannel = s.upgradeChannel || 'none';
+  if (upgradeChannel !== 'none') {
+    lines.push('## Configure Upgrade Channel');
+    lines.push('');
+    lines.push('```bash');
+    lines.push('az aks update \\');
+    lines.push('  --resource-group ' + rgName + ' \\');
+    lines.push('  --name ' + aksName + ' \\');
+    lines.push('  --auto-upgrade-channel ' + upgradeChannel);
+    lines.push('```');
+    lines.push('');
+  }
+
+  // Availability zones guidance
+  var azZones = s.availabilityZones || [];
+  if (azZones.length > 0) {
+    lines.push('## Availability Zones');
+    lines.push('');
+    lines.push('This cluster is configured with availability zones: ' + azZones.join(', ') + '.');
+    lines.push('Ensure your persistent volumes use zone-redundant storage (ZRS) for cross-zone resilience.');
+    lines.push('');
+  }
+
+  // Ecosystem tools
+  var tools = s.ecosystemTools || {};
+  var catKeys = Object.keys(ECOSYSTEM_TOOLS);
+  var hasToolSection = false;
+  for (var ci = 0; ci < catKeys.length; ci++) {
+    var catTools = ECOSYSTEM_TOOLS[catKeys[ci]].tools;
+    for (var ti = 0; ti < catTools.length; ti++) {
+      var tool = catTools[ti];
+      if (!tools[tool.id]) continue;
+      if (!hasToolSection) {
+        lines.push('## Ecosystem Tools');
+        lines.push('');
+        hasToolSection = true;
+      }
+      var g = tool.guidance;
+
+      lines.push('### ' + tool.label);
+      lines.push('');
+      lines.push(tool.description);
+      lines.push('');
+
+      if (g && g.commands && g.commands.length) {
+        lines.push('```bash');
+        for (var ci2 = 0; ci2 < g.commands.length; ci2++) {
+          var cmd = g.commands[ci2]
+            .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName)
+            .replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName);
+          lines.push(cmd);
+        }
+        lines.push('```');
+        lines.push('');
+      }
+
+      if (g && g.verifyCmd) {
+        var verifyCmd = g.verifyCmd
+          .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName)
+          .replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName);
+        lines.push('Verify:');
+        lines.push('');
+        lines.push('```bash');
+        lines.push(verifyCmd);
+        lines.push('```');
+        lines.push('');
+      }
+
+      if (g && g.note) {
+        lines.push('> ' + g.note);
+        lines.push('');
+      }
+
+      lines.push('*Starter commands -- review values for production use.*');
+      lines.push('');
+    }
+  }
+
+  // Validation checklist
+  lines.push('## Validation Checklist');
+  lines.push('');
+  lines.push('- [ ] Deployment completed without errors');
+  lines.push('- [ ] `kubectl get nodes` shows all nodes Ready');
+  lines.push('- [ ] Cluster RBAC verified with admin group');
+  if (s.deployAcr) lines.push('- [ ] ACR accessible from AKS cluster');
+  if (s.deployKeyVault) lines.push('- [ ] Key Vault accessible and secrets mounted');
+  if (s.deployMonitoring) lines.push('- [ ] Monitoring and logging operational');
+  if (s.enablePrivateCluster) lines.push('- [ ] Private endpoint connectivity verified');
+  lines.push('- [ ] Network policies tested');
+  lines.push('- [ ] Workload identity functioning');
+  lines.push('');
+
+  return lines.join('\n');
+}
+
+// ============================================================
+// DOWNLOAD / COPY HELPERS
+// ============================================================
+
+function downloadFile(filename, content) {
+  var blob = new Blob([content], { type: 'text/plain' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function copyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function() {
+      showCopyFeedback('Copied to clipboard');
+    }).catch(function() {
+      fallbackCopy(text);
+    });
+  } else {
+    fallbackCopy(text);
+  }
+}
+
+function fallbackCopy(text) {
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand('copy');
+    showCopyFeedback('Copied to clipboard');
+  } catch (e) {
+    showCopyFeedback('Copy failed');
+  }
+  document.body.removeChild(ta);
+}
+
+function showCopyFeedback(msg) {
+  var el = document.getElementById('saveStatus');
+  if (el) {
+    el.textContent = msg;
+    el.className = 'text-xs text-green-600 absolute right-4 bottom-1';
+    setTimeout(function() {
+      el.textContent = 'Auto-saved';
+      el.className = 'text-xs text-gray-400 absolute right-4 bottom-1';
+    }, 2000);
+  }
+}
 
 // ============================================================
 // PERSISTENCE
