@@ -2562,7 +2562,7 @@ function loadConfig() {
         var stateData;
         var versionMismatch = false;
 
-        if (parsed && parsed.schemaVersion !== undefined && parsed.state) {
+        if (parsed && parsed.schemaVersion !== undefined && parsed.state && typeof parsed.state === 'object' && !Array.isArray(parsed.state)) {
           // Versioned format
           if (parsed.schemaVersion !== SCHEMA_VERSION) {
             versionMismatch = true;
