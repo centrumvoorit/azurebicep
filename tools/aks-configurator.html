@@ -3071,6 +3071,35 @@ function renderStep7() {
   }
   html += '</div></div></details>';
 
+  // API Versions panel
+  html += '<details class="border rounded-lg mb-6">' +
+    '<summary class="px-4 py-3 text-base font-semibold text-gray-700 cursor-pointer hover:bg-gray-50 select-none">Resource API Versions</summary>' +
+    '<div class="px-4 pb-4">' +
+    '<p class="text-xs text-gray-500 mb-3">Azure Resource Manager API versions embedded in the generated Bicep modules.</p>' +
+    '<div class="grid grid-cols-2 gap-2">';
+  var apiVersions = [
+    { resource: 'AKS Cluster', version: '2024-09-01' },
+    { resource: 'VNet / NSGs', version: '2024-05-01' },
+    { resource: 'Private Endpoints', version: '2024-05-01' },
+    { resource: 'Private DNS Zones', version: '2024-06-01' },
+    { resource: 'Container Registry', version: '2025-04-01' },
+    { resource: 'Key Vault', version: '2025-05-01' },
+    { resource: 'Log Analytics', version: '2025-07-01' },
+    { resource: 'Managed Identity', version: '2024-11-30' },
+    { resource: 'Role Assignments', version: '2022-04-01' },
+    { resource: 'Diagnostic Settings', version: '2021-05-01-preview' },
+    { resource: 'Resource Groups', version: '2024-03-01' },
+  ];
+  for (var avi = 0; avi < apiVersions.length; avi++) {
+    var av = apiVersions[avi];
+    var isPreview = av.version.indexOf('preview') >= 0;
+    html += '<div class="bg-gray-50 rounded p-2 flex justify-between items-center">' +
+      '<span class="text-xs font-medium text-gray-700">' + escapeHtml(av.resource) + '</span>' +
+      '<span class="text-xs font-mono ' + (isPreview ? 'text-amber-600' : 'text-green-700') + '">' + escapeHtml(av.version) + '</span>' +
+    '</div>';
+  }
+  html += '</div></div></details>';
+
   // Generate file contents
   var bicepContent = generateBicepParam(s);
   var guideContent = generateDeploymentGuide(s);
