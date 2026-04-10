@@ -788,7 +788,8 @@ function validateStep(stepNum) {
   if (stepNum === 6) {
     var ecoTools = getVal('ecosystemTools') || {};
 
-    // Check conflict pairs across all categories
+    // Check conflict pairs across all categories (deduplicated)
+    var seenConflicts = {};
     var catKeys6 = Object.keys(ECOSYSTEM_TOOLS);
     for (var ci6 = 0; ci6 < catKeys6.length; ci6++) {
       var cat6Tools = ECOSYSTEM_TOOLS[catKeys6[ci6]].tools;
@@ -799,6 +800,9 @@ function validateStep(stepNum) {
         for (var xi = 0; xi < tool6.conflicts.length; xi++) {
           var conflictId = tool6.conflicts[xi];
           if (ecoTools[conflictId]) {
+            var pairKey = [tool6.id, conflictId].sort().join('::');
+            if (seenConflicts[pairKey]) continue;
+            seenConflicts[pairKey] = true;
             // Find the conflicting tool label
             var conflictLabel = conflictId;
             var catKeys6b = Object.keys(ECOSYSTEM_TOOLS);
