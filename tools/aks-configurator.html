@@ -660,6 +660,63 @@ function validateStep(stepNum) {
       result.errors.push('Tag: Project is required.');
     }
   }
+  if (stepNum === 3) {
+    var vnet = getVal('vnetAddressPrefix') || '';
+    var aksSub = getVal('aksSubnetPrefix') || '';
+    var svcSub = getVal('servicesSubnetPrefix') || '';
+    var peSub = getVal('privateEndpointSubnetPrefix') || '';
+    var svcCidr = getVal('serviceCidr') || '';
+    var dnsIp = getVal('dnsServiceIP') || '';
+
+    if (!parseCIDR(vnet)) result.errors.push('VNet address prefix is not a valid CIDR.');
+    if (!parseCIDR(aksSub)) result.errors.push('AKS subnet prefix is not a valid CIDR.');
+    if (!parseCIDR(svcSub)) result.errors.push('Services subnet prefix is not a valid CIDR.');
+    if (!parseCIDR(peSub)) result.errors.push('PE subnet prefix is not a valid CIDR.');
+    if (!parseCIDR(svcCidr)) result.errors.push('Service CIDR is not a valid CIDR.');
+
+    if (parseCIDR(vnet)) {
+      if (parseCIDR(aksSub) && !isWithinCIDR(aksSub, vnet)) result.errors.push('AKS subnet must be within the VNet CIDR.');
+      if (parseCIDR(svcSub) && !isWithinCIDR(svcSub, vnet)) result.errors.push('Services subnet must be within the VNet CIDR.');
+      if (parseCIDR(peSub) && !isWithinCIDR(peSub, vnet)) result.errors.push('PE subnet must be within the VNet CIDR.');
+      if (parseCIDR(svcCidr) && cidrsOverlap(svcCidr, vnet)) result.errors.push('Service CIDR must not overlap the VNet address space.');
+    }
+
+    if (parseCIDR(aksSub) && parseCIDR(svcSub) && cidrsOverlap(aksSub, svcSub)) result.errors.push('AKS subnet and Services subnet overlap.');
+    if (parseCIDR(aksSub) && parseCIDR(peSub) && cidrsOverlap(aksSub, peSub)) result.errors.push('AKS subnet and PE subnet overlap.');
+    if (parseCIDR(svcSub) && parseCIDR(peSub) && cidrsOverlap(svcSub, peSub)) result.errors.push('Services subnet and PE subnet overlap.');
+
+    if (parseCIDR(svcCidr) && dnsIp && !isIPInCIDR(dnsIp, svcCidr)) result.errors.push('DNS service IP must be within the Service CIDR.');
+
+    // Capacity warning: estimate required IPs for AKS subnet
+    if (parseCIDR(aksSub)) {
+      var sysAutoscaling = getVal('systemAutoscaling');
+      var sysMaxCount = getVal('systemNodeMaxCount');
+      var sysCount = getVal('systemNodeCount');
+      var userAutoscaling = getVal('userAutoscaling');
+      var userMaxCount = getVal('userNodeMaxCount');
+      var userCount = getVal('userNodeCount');
+      var maxPods = getVal('maxPodsPerNode');
+
+      var envDef = ENV_DEFAULTS[getVal('environment') || 'dev'] || ENV_DEFAULTS.dev;
+      var maxSystemNodes = (sysAutoscaling !== undefined && sysAutoscaling !== null)
+        ? (sysAutoscaling ? (sysMaxCount !== undefined ? sysMaxCount : envDef.systemNodeMaxCount) : (sysCount !== undefined ? sysCount : envDef.systemNodeCount))
+        : envDef.systemNodeMaxCount;
+      var maxUserNodes = (userAutoscaling !== undefined && userAutoscaling !== null)
+        ? (userAutoscaling ? (userMaxCount !== undefined ? userMaxCount : envDef.userNodeMaxCount) : (userCount !== undefined ? userCount : envDef.userNodeCount))
+        : envDef.userNodeMaxCount;
+      var podsPerNode = (maxPods !== undefined && maxPods !== null) ? maxPods : envDef.maxPodsPerNode;
+
+      var requiredIPs = (maxSystemNodes + maxUserNodes) * podsPerNode + (maxSystemNodes + maxUserNodes);
+      var aksCapacity = cidrCapacity(aksSub);
+      if (requiredIPs > aksCapacity) {
+        result.warnings.push(
+          'AKS subnet capacity may be insufficient. Estimated required IPs: ' + requiredIPs +
+          ' (nodes: ' + (maxSystemNodes + maxUserNodes) + ', pods/node: ' + podsPerNode + ')' +
+          ', subnet capacity: ' + aksCapacity + '. Consider enlarging the AKS subnet.'
+        );
+      }
+    }
+  }
   return result;
 }
 
@@ -1172,8 +1229,189 @@ function renderStep2() {
     errorsHtml(validation.errors) +
     warningsHtml(validation.warnings);
 }
+// ============================================================
+// STEP 3 HELPERS
+// ============================================================
+
+function onVnetChange(value) {
+  setValNoRender('vnetAddressPrefix', value);
+  var suggestions = suggestSubnets(value);
+  if (suggestions.aksSubnet && !state.aksSubnetPrefix._edited) {
+    setValNoRender('aksSubnetPrefix', suggestions.aksSubnet);
+  }
+  if (suggestions.servicesSubnet && !state.servicesSubnetPrefix._edited) {
+    setValNoRender('servicesSubnetPrefix', suggestions.servicesSubnet);
+  }
+  if (suggestions.peSubnet && !state.privateEndpointSubnetPrefix._edited) {
+    setValNoRender('privateEndpointSubnetPrefix', suggestions.peSubnet);
+  }
+  autoSave();
+  render();
+}
+
+function renderMultiInput(key, values, placeholder) {
+  var inputSmCls = 'flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500';
+  var btnDangerCls = 'px-2 py-1.5 text-xs border border-red-300 text-red-600 rounded hover:bg-red-50 flex-shrink-0';
+  var btnAddCls = 'mt-2 px-3 py-1.5 text-xs border border-blue-300 text-blue-600 rounded hover:bg-blue-50';
+  var arr = values || [];
+  if (arr.length === 0) arr = [''];
+  var html = '';
+  for (var i = 0; i < arr.length; i++) {
+    html +=
+      '<div class="flex gap-2 mb-2">' +
+        '<input type="text" value="' + escapeHtml(arr[i]) + '" placeholder="' + escapeHtml(placeholder) + '"' +
+          ' oninput="updateArrayItem(\'' + key + '\',' + i + ',this.value)"' +
+          ' class="' + inputSmCls + ' font-mono">' +
+        '<button onclick="removeArrayItem(\'' + key + '\',' + i + ')" class="' + btnDangerCls + '" title="Remove">&#x2715;</button>' +
+      '</div>';
+  }
+  html += '<button onclick="addArrayItem(\'' + key + '\')" class="' + btnAddCls + '">+ Add IP Range</button>';
+  return html;
+}
+
+function renderSubnetVisual(s) {
+  var vnet = s.vnetAddressPrefix;
+  var aksCidr = s.aksSubnetPrefix;
+  var svcCidr = s.servicesSubnetPrefix;
+  var peCidr = s.privateEndpointSubnetPrefix;
+
+  var vnetCap = cidrCapacity(vnet);
+  var aksCap = cidrCapacity(aksCidr);
+  var svcCap = cidrCapacity(svcCidr);
+  var peCap = cidrCapacity(peCidr);
+
+  if (!parseCIDR(vnet) || vnetCap === 0) {
+    return '<div class="text-xs text-gray-400 italic">Enter a valid VNet CIDR to see subnet layout.</div>';
+  }
+
+  // Calculate percentages for bar
+  var aksValid = parseCIDR(aksCidr) && isWithinCIDR(aksCidr, vnet);
+  var svcValid = parseCIDR(svcCidr) && isWithinCIDR(svcCidr, vnet);
+  var peValid = parseCIDR(peCidr) && isWithinCIDR(peCidr, vnet);
+
+  var aksCount = aksValid ? aksCap : 0;
+  var svcCount = svcValid ? svcCap : 0;
+  var peCount = peValid ? peCap : 0;
+  var usedCount = aksCount + svcCount + peCount;
+  var freeCount = vnetCap - usedCount;
+  if (freeCount < 0) freeCount = 0;
+
+  var aksPct = vnetCap > 0 ? (aksCount / vnetCap * 100).toFixed(1) : 0;
+  var svcPct = vnetCap > 0 ? (svcCount / vnetCap * 100).toFixed(1) : 0;
+  var pePct = vnetCap > 0 ? (peCount / vnetCap * 100).toFixed(1) : 0;
+  var freePct = vnetCap > 0 ? (freeCount / vnetCap * 100).toFixed(1) : 0;
+
+  var barHtml = '<div class="flex rounded overflow-hidden h-6 text-xs font-medium">';
+  if (aksCount > 0) {
+    barHtml += '<div class="bg-blue-500 text-white flex items-center justify-center overflow-hidden" style="width:' + aksPct + '%">' +
+      (parseFloat(aksPct) > 8 ? 'AKS' : '') + '</div>';
+  }
+  if (svcCount > 0) {
+    barHtml += '<div class="bg-green-500 text-white flex items-center justify-center overflow-hidden" style="width:' + svcPct + '%">' +
+      (parseFloat(svcPct) > 8 ? 'Svc' : '') + '</div>';
+  }
+  if (peCount > 0) {
+    barHtml += '<div class="bg-purple-500 text-white flex items-center justify-center overflow-hidden" style="width:' + pePct + '%">' +
+      (parseFloat(pePct) > 8 ? 'PE' : '') + '</div>';
+  }
+  if (freeCount > 0) {
+    barHtml += '<div class="bg-gray-200 text-gray-500 flex items-center justify-center overflow-hidden" style="width:' + freePct + '%">' +
+      (parseFloat(freePct) > 8 ? 'Free' : '') + '</div>';
+  }
+  barHtml += '</div>';
+
+  var legendHtml = '<div class="flex flex-wrap gap-4 mt-2 text-xs text-gray-600">' +
+    (aksCount > 0 ? '<span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm bg-blue-500"></span>AKS: ' + aksCount.toLocaleString() + ' IPs (' + aksCidr + ')</span>' : '') +
+    (svcCount > 0 ? '<span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm bg-green-500"></span>Services: ' + svcCount.toLocaleString() + ' IPs (' + svcCidr + ')</span>' : '') +
+    (peCount > 0 ? '<span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm bg-purple-500"></span>PE: ' + peCount.toLocaleString() + ' IPs (' + peCidr + ')</span>' : '') +
+    (freeCount > 0 ? '<span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm bg-gray-300"></span>Free: ' + freeCount.toLocaleString() + ' IPs</span>' : '') +
+    '</div>' +
+    '<p class="text-xs text-gray-400 mt-1">VNet total: ' + vnetCap.toLocaleString() + ' IPs (' + vnet + ')</p>';
+
+  return barHtml + legendHtml;
+}
+
 function renderStep3() {
-  return '<h2 class="text-xl font-bold text-gray-800 mb-4">Step 3: Networking</h2><p class="text-gray-500">Coming in next build...</p>';
+  var inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500';
+  var validation = validateStep(3);
+
+  var vnet = getVal('vnetAddressPrefix') || '';
+  var aksSub = getVal('aksSubnetPrefix') || '';
+  var svcSub = getVal('servicesSubnetPrefix') || '';
+  var peSub = getVal('privateEndpointSubnetPrefix') || '';
+  var svcCidr = getVal('serviceCidr') || '10.0.0.0/16';
+  var dnsIp = getVal('dnsServiceIP') || '10.0.0.10';
+  var apiIPs = getVal('apiServerAuthorizedIPs') || [];
+  var isPrivate = getVal('enablePrivateCluster');
+
+  var s = {
+    vnetAddressPrefix: vnet,
+    aksSubnetPrefix: aksSub,
+    servicesSubnetPrefix: svcSub,
+    privateEndpointSubnetPrefix: peSub
+  };
+
+  return '<h2 class="text-xl font-bold text-gray-800 mb-1">Step 3: Networking</h2>' +
+    '<p class="text-sm text-gray-500 mb-6">Configure VNet, subnets, and cluster networking parameters.</p>' +
+
+    infoPanel('Network plugin: Azure CNI. Network policy: Azure. Outbound: Load Balancer. These are hardcoded in the current Bicep modules.') +
+    '<div class="mb-6"></div>' +
+
+    fieldRow('VNet Address Prefix',
+      '<input type="text" value="' + escapeHtml(vnet) + '" placeholder="e.g. 10.1.0.0/16"' +
+        ' oninput="onVnetChange(this.value)" class="' + inputCls + ' font-mono">',
+      'params',
+      'CIDR block for the virtual network. Changing this auto-suggests subnet prefixes for fields you have not manually edited.') +
+
+    '<div class="grid grid-cols-3 gap-4 mb-4">' +
+      '<div>' +
+        '<label class="block text-sm font-medium text-gray-700 mb-1">AKS Subnet ' + badge('params') + '</label>' +
+        '<input type="text" value="' + escapeHtml(aksSub) + '" placeholder="e.g. 10.1.0.0/20"' +
+          ' oninput="setVal(\'aksSubnetPrefix\', this.value)" class="' + inputCls + ' font-mono">' +
+        '<p class="text-xs text-gray-500 mt-1">Node and pod IPs. Needs enough space for max pods per node times max node count.</p>' +
+      '</div>' +
+      '<div>' +
+        '<label class="block text-sm font-medium text-gray-700 mb-1">Services Subnet ' + badge('params') + '</label>' +
+        '<input type="text" value="' + escapeHtml(svcSub) + '" placeholder="e.g. 10.1.16.0/24"' +
+          ' oninput="setVal(\'servicesSubnetPrefix\', this.value)" class="' + inputCls + ' font-mono">' +
+        '<p class="text-xs text-gray-500 mt-1">Subnet for AKS internal load balancers and cluster-internal services.</p>' +
+      '</div>' +
+      '<div>' +
+        '<label class="block text-sm font-medium text-gray-700 mb-1">PE Subnet ' + badge('params') + '</label>' +
+        '<input type="text" value="' + escapeHtml(peSub) + '" placeholder="e.g. 10.1.17.0/24"' +
+          ' oninput="setVal(\'privateEndpointSubnetPrefix\', this.value)" class="' + inputCls + ' font-mono">' +
+        '<p class="text-xs text-gray-500 mt-1">Subnet for private endpoints (ACR, Key Vault, etc.). Separate from node subnet.</p>' +
+      '</div>' +
+    '</div>' +
+
+    fieldRow('Service CIDR',
+      '<input type="text" value="' + escapeHtml(svcCidr) + '" placeholder="10.0.0.0/16"' +
+        ' oninput="setVal(\'serviceCidr\', this.value)" class="' + inputCls + ' font-mono">',
+      'params',
+      'IP range for Kubernetes internal services (ClusterIP). Must not overlap VNet address space.') +
+
+    fieldRow('DNS Service IP',
+      '<input type="text" value="' + escapeHtml(dnsIp) + '" placeholder="10.0.0.10"' +
+        ' oninput="setVal(\'dnsServiceIP\', this.value)" class="' + inputCls + ' font-mono">',
+      'params',
+      'IP address within the Service CIDR assigned to the cluster DNS service (CoreDNS).') +
+
+    (!isPrivate ?
+      fieldRow('API Server Authorized IP Ranges',
+        renderMultiInput('apiServerAuthorizedIPs', apiIPs, '0.0.0.0/0'),
+        'guide',
+        'Applied post-deploy via az aks update. Only for public clusters. Leave empty to allow all (not recommended for production).') :
+      '') +
+
+    '<div class="mt-6">' +
+      '<h3 class="text-sm font-semibold text-gray-700 mb-2">Subnet Layout</h3>' +
+      '<div class="bg-gray-50 border border-gray-200 rounded-lg p-4">' +
+        renderSubnetVisual(s) +
+      '</div>' +
+    '</div>' +
+
+    errorsHtml(validation.errors) +
+    warningsHtml(validation.warnings);
 }
 function renderStep4() {
   return '<h2 class="text-xl font-bold text-gray-800 mb-4">Step 4: Compute</h2><p class="text-gray-500">Coming in next build...</p>';
