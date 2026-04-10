@@ -1604,29 +1604,36 @@ function setVal(key, value) {
   state[key].value = value;
   state[key]._edited = true;
   autoSave();
-  // Do NOT re-render — avoids destroying the focused input.
-  // The step re-renders on navigation (next/prev/goToStep) or setValNow calls.
-  // Inline-update the resource name preview if on step 1.
-  if (currentStep === 1 && (key === 'customerName' || key === 'environment' || key === 'location')) {
-    var namePreview = document.getElementById('resourceNamePreview');
-    if (namePreview) {
-      var n = getVal('customerName') || '';
-      var e = getVal('environment') || 'dev';
-      var l = getVal('location') || '';
-      namePreview.textContent = '';
-      var lines = [
-        ['Resource Group: ', 'rg-' + n + '-' + e + '-' + l],
-        ['AKS Cluster: ', 'aks-' + n + '-' + e],
-        ['ACR: ', 'acr' + n.replace(/-/g, '') + e],
-      ];
-      for (var li = 0; li < lines.length; li++) {
-        var div = document.createElement('div');
-        div.appendChild(document.createTextNode(lines[li][0]));
-        var span = document.createElement('span');
-        span.className = 'text-blue-700';
-        span.textContent = lines[li][1];
-        div.appendChild(span);
-        namePreview.appendChild(div);
+  // Debounced focus-preserving render
+  if (_renderTimer) clearTimeout(_renderTimer);
+  _renderTimer = setTimeout(function() {
+    _renderTimer = null;
+    renderPreservingFocus();
+  }, 400);
+}
+
+function renderPreservingFocus() {
+  var focused = document.activeElement;
+  var tag = focused ? focused.tagName : '';
+  var isInput = (tag === 'INPUT' || tag === 'TEXTAREA');
+  // Find the focused input by matching its oninput attribute or position
+  var focusSelector = null;
+  var cursorPos = null;
+  if (isInput && focused.getAttribute('oninput')) {
+    focusSelector = focused.getAttribute('oninput');
+    cursorPos = focused.selectionStart;
+  }
+  render();
+  // Restore focus by finding input with matching oninput handler
+  if (focusSelector) {
+    var inputs = document.querySelectorAll('input, textarea');
+    for (var i = 0; i < inputs.length; i++) {
+      if (inputs[i].getAttribute('oninput') === focusSelector) {
+        inputs[i].focus();
+        if (cursorPos !== null) {
+          try { inputs[i].setSelectionRange(cursorPos, cursorPos); } catch(e) {}
+        }
+        break;
       }
     }
   }
@@ -2454,7 +2461,9 @@ function onVnetChange(value) {
     setValNoRender('privateEndpointSubnetPrefix', suggestions.peSubnet);
   }
   autoSave();
-  // Do NOT re-render while typing — subnets will update on step navigation.
+  // Debounced focus-preserving render to update subnet suggestions
+  if (_renderTimer) clearTimeout(_renderTimer);
+  _renderTimer = setTimeout(function() { _renderTimer = null; renderPreservingFocus(); }, 400);
 }
 
 function renderMultiInput(key, values, placeholder) {
