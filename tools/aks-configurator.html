@@ -2150,7 +2150,13 @@ function generateBicepParam(s) {
   for (var i = 0; i < customTags.length; i++) {
     var ct = customTags[i];
     if (ct.key && ct.key.trim()) {
-      lines.push('  ' + ct.key.trim() + ': ' + bicepString(ct.value || ''));
+      var tagKey = ct.key.trim();
+      // Quote tag key if it contains non-identifier characters
+      if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(tagKey)) {
+        lines.push('  ' + tagKey + ': ' + bicepString(ct.value || ''));
+      } else {
+        lines.push('  ' + bicepString(tagKey) + ': ' + bicepString(ct.value || ''));
+      }
     }
   }
   lines.push('}');
@@ -2406,8 +2412,10 @@ function downloadFile(filename, content) {
   var a = document.createElement('a');
   a.href = url;
   a.download = filename;
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+  setTimeout(function() { URL.revokeObjectURL(url); }, 100);
 }
 
 function copyToClipboard(text) {
