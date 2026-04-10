@@ -785,6 +785,54 @@ function validateStep(stepNum) {
       }
     }
   }
+  if (stepNum === 6) {
+    var ecoTools = getVal('ecosystemTools') || {};
+
+    // Check conflict pairs across all categories
+    var catKeys6 = Object.keys(ECOSYSTEM_TOOLS);
+    for (var ci6 = 0; ci6 < catKeys6.length; ci6++) {
+      var cat6Tools = ECOSYSTEM_TOOLS[catKeys6[ci6]].tools;
+      for (var ti6 = 0; ti6 < cat6Tools.length; ti6++) {
+        var tool6 = cat6Tools[ti6];
+        if (!ecoTools[tool6.id]) continue;
+        if (!tool6.conflicts) continue;
+        for (var xi = 0; xi < tool6.conflicts.length; xi++) {
+          var conflictId = tool6.conflicts[xi];
+          if (ecoTools[conflictId]) {
+            // Find the conflicting tool label
+            var conflictLabel = conflictId;
+            var catKeys6b = Object.keys(ECOSYSTEM_TOOLS);
+            for (var ci6b = 0; ci6b < catKeys6b.length; ci6b++) {
+              var cat6bTools = ECOSYSTEM_TOOLS[catKeys6b[ci6b]].tools;
+              for (var ti6b = 0; ti6b < cat6bTools.length; ti6b++) {
+                if (cat6bTools[ti6b].id === conflictId) {
+                  conflictLabel = cat6bTools[ti6b].label;
+                }
+              }
+            }
+            result.warnings.push(tool6.label + ' and ' + conflictLabel + ' cannot be used together.');
+          }
+        }
+      }
+    }
+
+    // Check requirements for each enabled tool
+    var catKeys6r = Object.keys(ECOSYSTEM_TOOLS);
+    for (var ci6r = 0; ci6r < catKeys6r.length; ci6r++) {
+      var cat6rTools = ECOSYSTEM_TOOLS[catKeys6r[ci6r]].tools;
+      for (var ti6r = 0; ti6r < cat6rTools.length; ti6r++) {
+        var tool6r = cat6rTools[ti6r];
+        if (!ecoTools[tool6r.id]) continue;
+        if (!tool6r.requirements) continue;
+        var reqMsgs6 = tool6r.requirements(state);
+        if (reqMsgs6 && reqMsgs6.length) {
+          for (var ri6 = 0; ri6 < reqMsgs6.length; ri6++) {
+            result.warnings.push(tool6r.label + ': ' + reqMsgs6[ri6]);
+          }
+        }
+      }
+    }
+  }
   return result;
 }
 
@@ -1770,8 +1818,125 @@ function renderStep5() {
     errorsHtml(validation.errors) +
     warningsHtml(validation.warnings);
 }
+function toggleEcoTool(toolId) {
+  var tools = Object.assign({}, getVal('ecosystemTools') || {});
+  tools[toolId] = !tools[toolId];
+  setVal('ecosystemTools', tools);
+}
+
+function renderToolGuidancePreview(tool, s) {
+  var g = tool.guidance;
+  if (!g) return '';
+
+  var rgName = 'rg-' + (s.customerName || '{name}') + '-' + (s.environment || '{env}') + '-' + (s.location || '{region}');
+  var aksName = 'aks-' + (s.customerName || '{name}') + '-' + (s.environment || '{env}');
+
+  function subVars(cmd) {
+    return cmd.replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName)
+              .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName);
+  }
+
+  var linesHtml = '';
+
+  if (g.commands && g.commands.length) {
+    for (var ci = 0; ci < g.commands.length; ci++) {
+      linesHtml += '<div class="font-mono text-xs text-green-300 mb-1 break-all">' + escapeHtml(subVars(g.commands[ci])) + '</div>';
+    }
+  }
+  if (g.verifyCmd) {
+    linesHtml += '<div class="font-mono text-xs text-blue-300 mt-2 break-all"># Verify</div>';
+    linesHtml += '<div class="font-mono text-xs text-green-300 mb-1 break-all">' + escapeHtml(subVars(g.verifyCmd)) + '</div>';
+  }
+
+  var noteHtml = g.note
+    ? '<p class="text-xs text-yellow-200 mt-2 italic">' + escapeHtml(g.note) + '</p>'
+    : '';
+
+  var disclaimerHtml = '<p class="text-xs text-gray-400 mt-3 border-t border-gray-600 pt-2">Starter commands &mdash; review values for production use.</p>';
+
+  return '<details class="mt-3">' +
+    '<summary class="text-xs text-blue-600 cursor-pointer hover:text-blue-800 select-none font-medium">Show guidance preview</summary>' +
+    '<div class="mt-2 bg-gray-800 rounded-lg p-3">' +
+      linesHtml +
+      noteHtml +
+      disclaimerHtml +
+    '</div>' +
+  '</details>';
+}
+
 function renderStep6() {
-  return '<h2 class="text-xl font-bold text-gray-800 mb-4">Step 6: Ecosystem Tools</h2><p class="text-gray-500">Coming in next build...</p>';
+  var validation = validateStep(6);
+  var tools = getVal('ecosystemTools') || {};
+  var s = getFlatState();
+
+  var html = '<h2 class="text-xl font-bold text-gray-800 mb-1">Step 6: Ecosystem Tools</h2>' +
+    '<p class="text-sm text-gray-500 mb-4">Select tools to include in your deployment guide.</p>' +
+    infoPanel('Select the tools to include in your deployment guide. Starter Helm commands and configuration guidance will be generated for each selected tool.') +
+    '<div class="mt-6"></div>';
+
+  var catKeys = Object.keys(ECOSYSTEM_TOOLS);
+  for (var ci = 0; ci < catKeys.length; ci++) {
+    var catKey = catKeys[ci];
+    var category = ECOSYSTEM_TOOLS[catKey];
+
+    html += '<div class="mb-8">';
+    html += '<h3 class="text-base font-semibold text-gray-700 pb-2 mb-4 border-b border-gray-200">' + escapeHtml(category.label) + '</h3>';
+
+    var catTools = category.tools;
+    for (var ti = 0; ti < catTools.length; ti++) {
+      var tool = catTools[ti];
+      var isEnabled = !!tools[tool.id];
+
+      // Evaluate requirements (pass raw state so .value access works)
+      var reqMsgs = tool.requirements ? tool.requirements(state) : [];
+      var reqNotMet = reqMsgs && reqMsgs.length > 0;
+
+      // Toggle button
+      var toggleCls = isEnabled
+        ? 'px-3 py-1 text-xs rounded font-medium border border-blue-600 bg-blue-600 text-white hover:bg-blue-700 flex-shrink-0'
+        : 'px-3 py-1 text-xs rounded font-medium border border-gray-300 text-gray-600 hover:bg-gray-50 flex-shrink-0';
+      var toggleBtn = '<button onclick="toggleEcoTool(\'' + tool.id + '\')" class="' + toggleCls + '">' +
+        (isEnabled ? 'ON' : 'OFF') + '</button>';
+
+      // Warning for unmet requirements when enabled
+      var reqWarningHtml = '';
+      if (isEnabled && reqNotMet) {
+        var reqItems = '';
+        for (var ri = 0; ri < reqMsgs.length; ri++) {
+          reqItems += '<li>' + escapeHtml(reqMsgs[ri]) + '</li>';
+        }
+        reqWarningHtml = '<div class="mt-2 bg-yellow-50 border border-yellow-200 rounded p-2">' +
+          '<ul class="text-xs text-yellow-700 list-disc list-inside">' + reqItems + '</ul>' +
+        '</div>';
+      }
+
+      // Guidance preview when enabled
+      var guidanceHtml = isEnabled ? renderToolGuidancePreview(tool, s) : '';
+
+      var cardBorder = isEnabled ? 'border-blue-300 bg-blue-50' : 'border-gray-200 bg-white';
+
+      html += '<div class="border rounded-lg p-4 mb-3 ' + cardBorder + '">' +
+        '<div class="flex items-start gap-3">' +
+          toggleBtn +
+          '<div class="flex-1 min-w-0">' +
+            '<div class="flex items-center gap-2 flex-wrap">' +
+              '<span class="text-sm font-semibold text-gray-800">' + escapeHtml(tool.label) + '</span>' +
+              deployBadge(tool.deployType) +
+            '</div>' +
+            '<p class="text-xs text-gray-500 mt-1">' + escapeHtml(tool.description) + '</p>' +
+            reqWarningHtml +
+            guidanceHtml +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }
+
+    html += '</div>';
+  }
+
+  html += warningsHtml(validation.warnings);
+
+  return html;
 }
 function renderStep7() {
   return '<h2 class="text-xl font-bold text-gray-800 mb-4">Step 7: Review &amp; Generate</h2><p class="text-gray-500">Coming in next build...</p>';
