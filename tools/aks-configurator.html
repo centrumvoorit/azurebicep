@@ -630,7 +630,7 @@ function validateStep(stepNum) {
         result.errors.push('Customer name must contain only alphanumeric characters and hyphens.');
       }
       if (name.length > 15) {
-        result.warnings.push('Customer name exceeds 15 characters. Some Azure resource names may be truncated.');
+        result.errors.push('Customer name must be 15 characters or less.');
       }
     }
     if (!getVal('location')) {
@@ -702,6 +702,7 @@ function cidrsOverlap(a, b) {
 function isIPInCIDR(ip, cidr) {
   var m = ip.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
   if (!m) return false;
+  if (+m[1] > 255 || +m[2] > 255 || +m[3] > 255 || +m[4] > 255) return false;
   var ipNum = ((+m[1] << 24) | (+m[2] << 16) | (+m[3] << 8) | +m[4]) >>> 0;
   var r = cidrRange(cidr);
   if (!r) return false;
@@ -719,6 +720,10 @@ function suggestSubnets(vnetPrefix) {
   var svc = ((svcStart >>> 24) & 0xFF) + '.' + ((svcStart >>> 16) & 0xFF) + '.' + ((svcStart >>> 8) & 0xFF) + '.' + (svcStart & 0xFF) + '/24';
   var peStart = (base + 17 * 256) >>> 0;
   var pe = ((peStart >>> 24) & 0xFF) + '.' + ((peStart >>> 16) & 0xFF) + '.' + ((peStart >>> 8) & 0xFF) + '.' + (peStart & 0xFF) + '/24';
+  // Validate suggestions fit inside VNet
+  if (!isWithinCIDR(aks, vnetPrefix) || !isWithinCIDR(svc, vnetPrefix) || !isWithinCIDR(pe, vnetPrefix)) {
+    return { aksSubnet: '', servicesSubnet: '', peSubnet: '' };
+  }
   return { aksSubnet: aks, servicesSubnet: svc, peSubnet: pe };
 }
 
@@ -905,7 +910,7 @@ function renderStep1() {
     '<p class="text-sm text-gray-500 mb-6">Core cluster identity, region, and connectivity settings.</p>' +
 
     fieldRow('Customer Name',
-      '<input type="text" value="' + escapeHtml(name) + '" maxlength="20" oninput="setVal(\'customerName\', this.value)" class="' + inputCls + '" placeholder="e.g. contoso">',
+      '<input type="text" value="' + escapeHtml(name) + '" maxlength="15" oninput="setVal(\'customerName\', this.value)" class="' + inputCls + '" placeholder="e.g. contoso">',
       'params', 'Used to generate Azure resource names. Alphanumeric and hyphens only, max 15 chars recommended.') +
 
     '<div class="mb-4 bg-gray-50 border border-gray-200 rounded-lg p-3">' +
