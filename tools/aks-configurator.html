@@ -1604,9 +1604,32 @@ function setVal(key, value) {
   state[key].value = value;
   state[key]._edited = true;
   autoSave();
-  // Debounce render to avoid destroying focused input on every keystroke
-  if (_renderTimer) clearTimeout(_renderTimer);
-  _renderTimer = setTimeout(function() { _renderTimer = null; render(); }, 300);
+  // Do NOT re-render — avoids destroying the focused input.
+  // The step re-renders on navigation (next/prev/goToStep) or setValNow calls.
+  // Inline-update the resource name preview if on step 1.
+  if (currentStep === 1 && (key === 'customerName' || key === 'environment' || key === 'location')) {
+    var namePreview = document.getElementById('resourceNamePreview');
+    if (namePreview) {
+      var n = getVal('customerName') || '';
+      var e = getVal('environment') || 'dev';
+      var l = getVal('location') || '';
+      namePreview.textContent = '';
+      var lines = [
+        ['Resource Group: ', 'rg-' + n + '-' + e + '-' + l],
+        ['AKS Cluster: ', 'aks-' + n + '-' + e],
+        ['ACR: ', 'acr' + n.replace(/-/g, '') + e],
+      ];
+      for (var li = 0; li < lines.length; li++) {
+        var div = document.createElement('div');
+        div.appendChild(document.createTextNode(lines[li][0]));
+        var span = document.createElement('span');
+        span.className = 'text-blue-700';
+        span.textContent = lines[li][1];
+        div.appendChild(span);
+        namePreview.appendChild(div);
+      }
+    }
+  }
 }
 
 // Immediate render variant for toggles/selects that need instant UI feedback
@@ -2241,10 +2264,10 @@ function renderStep1() {
 
     '<div class="mb-4 bg-gray-50 border border-gray-200 rounded-lg p-3">' +
       '<p class="text-xs font-medium text-gray-500 mb-2">Resource Name Preview</p>' +
-      '<div class="grid grid-cols-3 gap-2 text-xs font-mono">' +
-        '<div><span class="text-gray-400">RG:</span> ' + escapeHtml(rgPreview) + '</div>' +
-        '<div><span class="text-gray-400">AKS:</span> ' + escapeHtml(aksPreview) + '</div>' +
-        '<div><span class="text-gray-400">ACR:</span> ' + escapeHtml(acrPreview) + '</div>' +
+      '<div id="resourceNamePreview" class="text-xs font-mono text-gray-700 space-y-0.5">' +
+        '<div>Resource Group: <span class="text-blue-700">' + escapeHtml(rgPreview) + '</span></div>' +
+        '<div>AKS Cluster: <span class="text-blue-700">' + escapeHtml(aksPreview) + '</span></div>' +
+        '<div>ACR: <span class="text-blue-700">' + escapeHtml(acrPreview) + '</span></div>' +
       '</div></div>' +
 
     fieldRow('Environment',
@@ -2431,9 +2454,7 @@ function onVnetChange(value) {
     setValNoRender('privateEndpointSubnetPrefix', suggestions.peSubnet);
   }
   autoSave();
-  // Debounce render to avoid focus loss while typing
-  if (_renderTimer) clearTimeout(_renderTimer);
-  _renderTimer = setTimeout(function() { _renderTimer = null; render(); }, 300);
+  // Do NOT re-render while typing — subnets will update on step navigation.
 }
 
 function renderMultiInput(key, values, placeholder) {
