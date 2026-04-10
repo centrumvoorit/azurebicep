@@ -7,112 +7,39 @@ on:
       - 'infra/**'
       - 'bicepconfig.json'
 
-permissions:
-  id-token: write
-  contents: read
-
 concurrency:
   group: deploy-infra
   cancel-in-progress: false
 
 jobs:
   deploy-dev:
-    name: Deploy Dev
-    runs-on: ubuntu-latest
-    environment: dev
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Deploy
-        run: |
-          az deployment sub create \
-            --location westeurope \
-            --template-file infra/main.bicep \
-            --parameters infra/main.dev.bicepparam \
-            --name "deploy-dev-${{ github.run_number }}"
-
-      - name: Verify AKS
-        run: |
-          CLUSTER_NAME=$(az deployment sub show \
-            --name "deploy-dev-${{ github.run_number }}" \
-            --query "properties.outputs.aksClusterName.value" -o tsv)
-          RG_NAME=$(az deployment sub show \
-            --name "deploy-dev-${{ github.run_number }}" \
-            --query "properties.outputs.resourceGroupName.value" -o tsv)
-          az aks show --name "$CLUSTER_NAME" --resource-group "$RG_NAME" --query "provisioningState" -o tsv
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment: dev
+      param-file: infra/main.dev.bicepparam
+    secrets:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
   deploy-acc:
-    name: Deploy Acceptatie
     needs: deploy-dev
-    runs-on: ubuntu-latest
-    environment: acc
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Deploy
-        run: |
-          az deployment sub create \
-            --location westeurope \
-            --template-file infra/main.bicep \
-            --parameters infra/main.acc.bicepparam \
-            --name "deploy-acc-${{ github.run_number }}"
-
-      - name: Verify AKS
-        run: |
-          CLUSTER_NAME=$(az deployment sub show \
-            --name "deploy-acc-${{ github.run_number }}" \
-            --query "properties.outputs.aksClusterName.value" -o tsv)
-          RG_NAME=$(az deployment sub show \
-            --name "deploy-acc-${{ github.run_number }}" \
-            --query "properties.outputs.resourceGroupName.value" -o tsv)
-          az aks show --name "$CLUSTER_NAME" --resource-group "$RG_NAME" --query "provisioningState" -o tsv
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment: acc
+      param-file: infra/main.acc.bicepparam
+    secrets:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
   deploy-prod:
-    name: Deploy Productie
     needs: deploy-acc
-    runs-on: ubuntu-latest
-    environment: prod
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Deploy
-        run: |
-          az deployment sub create \
-            --location westeurope \
-            --template-file infra/main.bicep \
-            --parameters infra/main.prod.bicepparam \
-            --name "deploy-prod-${{ github.run_number }}"
-
-      - name: Verify AKS
-        run: |
-          CLUSTER_NAME=$(az deployment sub show \
-            --name "deploy-prod-${{ github.run_number }}" \
-            --query "properties.outputs.aksClusterName.value" -o tsv)
-          RG_NAME=$(az deployment sub show \
-            --name "deploy-prod-${{ github.run_number }}" \
-            --query "properties.outputs.resourceGroupName.value" -o tsv)
-          az aks show --name "$CLUSTER_NAME" --resource-group "$RG_NAME" --query "provisioningState" -o tsv
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment: prod
+      param-file: infra/main.prod.bicepparam
+    secrets:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}

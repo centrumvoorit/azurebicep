@@ -1,5 +1,16 @@
 targetScope = 'subscription'
 
+import {
+  environmentType
+  tagsType
+  networkConfigType
+  aksConfigType
+  featureFlagsType
+  acrSkuType
+  keyVaultSkuType
+  roleAssignmentType
+} from 'types.bicep'
+
 // ============================================================================
 // Parameters
 // ============================================================================
@@ -8,65 +19,46 @@ targetScope = 'subscription'
 param customerName string
 
 @description('Environment name')
-@allowed(['dev', 'acc', 'prod'])
-param environment string
+param environment environmentType
 
 @description('Azure region for all resources')
 param location string
 
 @description('Tags to apply to all resources')
-param tags object
+param tags tagsType
+
+// Feature Flags
+@description('Feature flags to enable or disable building blocks')
+param features featureFlagsType
 
 // Network
-@description('Address prefix for the virtual network')
-param vnetAddressPrefix string
-
-@description('Address prefix for the AKS subnet')
-param aksSubnetPrefix string
-
-@description('Address prefix for the services subnet')
-param servicesSubnetPrefix string
-
-@description('Address prefix for the private endpoints subnet')
-param privateEndpointSubnetPrefix string
+@description('Network configuration for VNet and subnets')
+param networkConfig networkConfigType
 
 // AKS
-@description('Kubernetes version')
-param aksKubernetesVersion string
-
-@description('System node pool VM count')
-param aksSystemNodeCount int
-
-@description('System node pool VM size')
-param aksSystemNodeVmSize string
-
-@description('User node pool VM count')
-param aksUserNodeCount int
-
-@description('User node pool VM size')
-param aksUserNodeVmSize string
-
-@description('Enable private AKS cluster')
-param enablePrivateCluster bool
+@description('AKS cluster configuration')
+param aksConfig aksConfigType
 
 @description('Azure AD admin group object IDs for AKS cluster admin access')
 param adminGroupObjectIds array
 
 // ACR
 @description('ACR SKU')
-@allowed(['Basic', 'Standard', 'Premium'])
-param acrSku string
+param acrSku acrSkuType
 
 // Key Vault
 @description('Key Vault SKU')
-@allowed(['standard', 'premium'])
-param keyVaultSku string
+param keyVaultSku keyVaultSkuType
 
 // Monitoring
 @description('Log Analytics retention in days')
 @minValue(30)
 @maxValue(730)
 param logRetentionDays int
+
+// Extensibility
+@description('Additional role assignments beyond the defaults')
+param additionalRoleAssignments roleAssignmentType[] = []
 
 // ============================================================================
 // Variables
@@ -105,10 +97,10 @@ module network 'modules/network/vnet.bicep' = {
     tags: envTags
     customerName: customerName
     environment: environment
-    vnetAddressPrefix: vnetAddressPrefix
-    aksSubnetPrefix: aksSubnetPrefix
-    servicesSubnetPrefix: servicesSubnetPrefix
-    privateEndpointSubnetPrefix: privateEndpointSubnetPrefix
+    vnetAddressPrefix: networkConfig.vnetAddressPrefix
+    aksSubnetPrefix: networkConfig.aksSubnetPrefix
+    servicesSubnetPrefix: networkConfig.servicesSubnetPrefix
+    privateEndpointSubnetPrefix: networkConfig.privateEndpointSubnetPrefix
   }
 }
 
@@ -123,7 +115,7 @@ module identity 'modules/identity/managedIdentity.bicep' = {
   }
 }
 
-module monitoring 'modules/monitoring/logAnalytics.bicep' = {
+module monitoring 'modules/monitoring/logAnalytics.bicep' = if (features.deployMonitoring) {
   name: 'monitoring-deployment'
   scope: rg
   params: {
@@ -135,7 +127,7 @@ module monitoring 'modules/monitoring/logAnalytics.bicep' = {
   }
 }
 
-module acr 'modules/acr/containerRegistry.bicep' = {
+module acr 'modules/acr/containerRegistry.bicep' = if (features.deployAcr) {
   name: 'acr-deployment'
   scope: rg
   params: {
@@ -146,11 +138,11 @@ module acr 'modules/acr/containerRegistry.bicep' = {
     acrSku: acrSku
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     vnetId: network.outputs.vnetId
-    logAnalyticsWorkspaceId: monitoring.outputs.workspaceId
+    logAnalyticsWorkspaceId: features.deployMonitoring ? monitoring.outputs.workspaceId : ''
   }
 }
 
-module keyVault 'modules/keyvault/keyVault.bicep' = {
+module keyVault 'modules/keyvault/keyVault.bicep' = if (features.deployKeyVault) {
   name: 'keyvault-deployment'
   scope: rg
   params: {
@@ -161,7 +153,7 @@ module keyVault 'modules/keyvault/keyVault.bicep' = {
     skuName: keyVaultSku
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     vnetId: network.outputs.vnetId
-    logAnalyticsWorkspaceId: monitoring.outputs.workspaceId
+    logAnalyticsWorkspaceId: features.deployMonitoring ? monitoring.outputs.workspaceId : ''
     tenantId: tenant().tenantId
   }
 }
@@ -174,15 +166,15 @@ module aks 'modules/aks/aksCluster.bicep' = {
     tags: envTags
     customerName: customerName
     environment: environment
-    kubernetesVersion: aksKubernetesVersion
+    kubernetesVersion: aksConfig.kubernetesVersion
     aksSubnetId: network.outputs.aksSubnetId
-    logAnalyticsWorkspaceId: monitoring.outputs.workspaceId
+    logAnalyticsWorkspaceId: features.deployMonitoring ? monitoring.outputs.workspaceId : ''
     userAssignedIdentityId: identity.outputs.identityId
-    enablePrivateCluster: enablePrivateCluster
-    systemNodeCount: aksSystemNodeCount
-    systemNodeVmSize: aksSystemNodeVmSize
-    userNodeCount: aksUserNodeCount
-    userNodeVmSize: aksUserNodeVmSize
+    enablePrivateCluster: aksConfig.enablePrivateCluster
+    systemNodeCount: aksConfig.systemNodeCount
+    systemNodeVmSize: aksConfig.systemNodeVmSize
+    userNodeCount: aksConfig.userNodeCount
+    userNodeVmSize: aksConfig.userNodeVmSize
     adminGroupObjectIds: adminGroupObjectIds
   }
 }
@@ -191,8 +183,8 @@ module aks 'modules/aks/aksCluster.bicep' = {
 // Role Assignments
 // ============================================================================
 
-// AKS kubelet identity -> ACR Pull
-module roleAcrPull 'modules/roleAssignment/roleAssignment.bicep' = {
+// AKS kubelet identity -> ACR Pull (only when ACR is deployed)
+module roleAcrPull 'modules/roleAssignment/roleAssignment.bicep' = if (features.deployAcr) {
   name: 'role-acr-pull'
   scope: rg
   params: {
@@ -211,8 +203,8 @@ module roleNetworkContributor 'modules/roleAssignment/roleAssignment.bicep' = {
   }
 }
 
-// AKS kubelet identity -> Key Vault Secrets User
-module roleKeyVaultSecretsUser 'modules/roleAssignment/roleAssignment.bicep' = {
+// AKS kubelet identity -> Key Vault Secrets User (only when Key Vault is deployed)
+module roleKeyVaultSecretsUser 'modules/roleAssignment/roleAssignment.bicep' = if (features.deployKeyVault) {
   name: 'role-keyvault-secrets-user'
   scope: rg
   params: {
@@ -221,11 +213,27 @@ module roleKeyVaultSecretsUser 'modules/roleAssignment/roleAssignment.bicep' = {
   }
 }
 
+// Additional role assignments (extensibility)
+module extraRoles 'modules/roleAssignment/roleAssignment.bicep' = [
+  for (role, i) in additionalRoleAssignments: {
+    name: 'role-extra-${i}'
+    scope: rg
+    params: {
+      principalId: role.principalId
+      roleDefinitionId: role.roleDefinitionId
+      principalType: role.?principalType ?? 'ServicePrincipal'
+    }
+  }
+]
+
 // ============================================================================
 // Outputs
 // ============================================================================
 
 output resourceGroupName string = rg.name
 output aksClusterName string = aks.outputs.aksClusterName
-output acrLoginServer string = acr.outputs.acrLoginServer
-output keyVaultUri string = keyVault.outputs.keyVaultUri
+output aksOidcIssuerUrl string = aks.outputs.aksOidcIssuerUrl
+output vnetId string = network.outputs.vnetId
+output acrLoginServer string = features.deployAcr ? acr.outputs.acrLoginServer : ''
+output keyVaultUri string = features.deployKeyVault ? keyVault.outputs.keyVaultUri : ''
+output logAnalyticsWorkspaceId string = features.deployMonitoring ? monitoring.outputs.workspaceId : ''

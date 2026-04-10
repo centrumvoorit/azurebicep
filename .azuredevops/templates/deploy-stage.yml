@@ -1,0 +1,52 @@
+parameters:
+  - name: environment
+    type: string
+  - name: paramFile
+    type: string
+  - name: serviceConnection
+    type: string
+  - name: location
+    type: string
+    default: 'westeurope'
+
+stages:
+  - stage: Deploy_${{ parameters.environment }}
+    displayName: 'Deploy ${{ parameters.environment }}'
+    jobs:
+      - deployment: Deploy
+        displayName: 'Deploy to ${{ parameters.environment }}'
+        environment: 'aks-${{ parameters.environment }}'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: 'Deploy Infrastructure'
+                  inputs:
+                    azureSubscription: '${{ parameters.serviceConnection }}'
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      az deployment sub create \
+                        --location ${{ parameters.location }} \
+                        --template-file infra/main.bicep \
+                        --parameters infra/${{ parameters.paramFile }} \
+                        --name "deploy-${{ parameters.environment }}-$(Build.BuildNumber)"
+
+                - task: AzureCLI@2
+                  displayName: 'Verify AKS'
+                  inputs:
+                    azureSubscription: '${{ parameters.serviceConnection }}'
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      DEPLOY_NAME="deploy-${{ parameters.environment }}-$(Build.BuildNumber)"
+                      CLUSTER_NAME=$(az deployment sub show \
+                        --name "$DEPLOY_NAME" \
+                        --query "properties.outputs.aksClusterName.value" -o tsv)
+                      RG_NAME=$(az deployment sub show \
+                        --name "$DEPLOY_NAME" \
+                        --query "properties.outputs.resourceGroupName.value" -o tsv)
+                      az aks show --name "$CLUSTER_NAME" --resource-group "$RG_NAME" --query "provisioningState" -o tsv

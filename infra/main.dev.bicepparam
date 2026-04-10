@@ -10,19 +10,30 @@ param tags = {
   Project: 'aks-platform'
 }
 
+// Feature Flags — schakel building blocks aan/uit
+param features = {
+  deployAcr: true
+  deployKeyVault: true
+  deployMonitoring: true
+}
+
 // Network
-param vnetAddressPrefix = '10.1.0.0/16'
-param aksSubnetPrefix = '10.1.0.0/20'
-param servicesSubnetPrefix = '10.1.16.0/24'
-param privateEndpointSubnetPrefix = '10.1.17.0/24'
+param networkConfig = {
+  vnetAddressPrefix: '10.1.0.0/16'
+  aksSubnetPrefix: '10.1.0.0/20'
+  servicesSubnetPrefix: '10.1.16.0/24'
+  privateEndpointSubnetPrefix: '10.1.17.0/24'
+}
 
 // AKS
-param aksKubernetesVersion = '1.30'
-param aksSystemNodeCount = 1
-param aksSystemNodeVmSize = 'Standard_D2s_v5'
-param aksUserNodeCount = 1
-param aksUserNodeVmSize = 'Standard_D4s_v5'
-param enablePrivateCluster = false
+param aksConfig = {
+  kubernetesVersion: '1.30'
+  systemNodeCount: 1
+  systemNodeVmSize: 'Standard_D2s_v5'
+  userNodeCount: 1
+  userNodeVmSize: 'Standard_D4s_v5'
+  enablePrivateCluster: false
+}
 
 param adminGroupObjectIds = [
   // Vervang met Azure AD groep Object ID's

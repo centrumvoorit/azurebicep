@@ -1,0 +1,13 @@
+framework:
+  - bicep
+
+directory:
+  - infra/
+
+soft-fail: true
+
+compact: true
+
+skip-check:
+  # Skip checks that we handle differently
+  - CKV_AZURE_4   # We use Log Analytics, not Azure Monitor diagnostic settings on every resource

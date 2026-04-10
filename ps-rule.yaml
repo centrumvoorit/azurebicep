@@ -1,0 +1,18 @@
+configuration:
+  AZURE_BICEP_FILE_EXPANSION: true
+  AZURE_BICEP_FILE_EXPANSION_TIMEOUT: 10
+  AZURE_DEPLOYMENT_NONSENSITIVE_PARAMETER_NAMES:
+    - customerName
+    - environment
+    - location
+
+input:
+  pathIgnore:
+    - '.github/'
+    - '.azuredevops/'
+    - 'scripts/'
+
+rule:
+  exclude:
+    # Exclude rules that conflict with our architecture choices
+    - 'Azure.Resource.UseTags' # We handle tags via envTags variable

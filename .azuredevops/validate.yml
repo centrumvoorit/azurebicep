@@ -12,33 +12,71 @@ pr:
 pool:
   vmImage: 'ubuntu-latest'
 
-strategy:
-  matrix:
-    dev:
-      envFile: 'main.dev.bicepparam'
-    acc:
-      envFile: 'main.acc.bicepparam'
-    prod:
-      envFile: 'main.prod.bicepparam'
+stages:
+  - stage: LintAndScan
+    displayName: 'Lint & Security Scan'
+    jobs:
+      - job: BicepBuild
+        displayName: 'Bicep Build & Lint'
+        steps:
+          - task: AzureCLI@2
+            displayName: 'Bicep Build'
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az bicep build --file infra/main.bicep
 
-steps:
-  - task: AzureCLI@2
-    displayName: 'Bicep Build'
-    inputs:
-      azureSubscription: '$(azureServiceConnection)'
-      scriptType: bash
-      scriptLocation: inlineScript
-      inlineScript: |
-        az bicep build --file infra/main.bicep
+      - job: PSRule
+        displayName: 'PSRule for Azure'
+        steps:
+          - task: ps-rule-assert@2
+            displayName: 'Run PSRule'
+            inputs:
+              inputPath: infra/
+              modules: PSRule.Rules.Azure
+              outputFormat: Markdown
+              outputPath: $(Build.ArtifactStagingDirectory)/ps-rule-results.md
 
-  - task: AzureCLI@2
-    displayName: 'What-If $(envFile)'
-    inputs:
-      azureSubscription: '$(azureServiceConnection)'
-      scriptType: bash
-      scriptLocation: inlineScript
-      inlineScript: |
-        az deployment sub what-if \
-          --location westeurope \
-          --template-file infra/main.bicep \
-          --parameters infra/$(envFile)
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish PSRule Results'
+            condition: always()
+            inputs:
+              pathToPublish: $(Build.ArtifactStagingDirectory)/ps-rule-results.md
+              artifactName: 'psrule-results'
+
+      - job: Checkov
+        displayName: 'Checkov Security Scan'
+        steps:
+          - script: |
+              pip install checkov
+              checkov --directory infra/ --framework bicep --soft-fail --output cli
+            displayName: 'Run Checkov'
+
+  - stage: WhatIf
+    displayName: 'What-If Analysis'
+    dependsOn: LintAndScan
+    jobs:
+      - job: WhatIf
+        displayName: 'What-If'
+        strategy:
+          matrix:
+            dev:
+              envFile: 'main.dev.bicepparam'
+            acc:
+              envFile: 'main.acc.bicepparam'
+            prod:
+              envFile: 'main.prod.bicepparam'
+        steps:
+          - task: AzureCLI@2
+            displayName: 'What-If $(envFile)'
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az deployment sub what-if \
+                  --location westeurope \
+                  --template-file infra/main.bicep \
+                  --parameters infra/$(envFile)

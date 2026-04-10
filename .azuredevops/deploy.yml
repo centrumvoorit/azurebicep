@@ -11,127 +11,23 @@ pool:
   vmImage: 'ubuntu-latest'
 
 variables:
-  location: 'westeurope'
+  serviceConnection: '$(azureServiceConnection)'
 
 stages:
-  - stage: DeployDev
-    displayName: 'Deploy Dev'
-    jobs:
-      - deployment: Deploy
-        displayName: 'Deploy to Dev'
-        environment: 'aks-dev'
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - checkout: self
+  - template: templates/deploy-stage.yml
+    parameters:
+      environment: 'dev'
+      paramFile: 'main.dev.bicepparam'
+      serviceConnection: $(serviceConnection)
 
-                - task: AzureCLI@2
-                  displayName: 'Deploy Dev Infrastructure'
-                  inputs:
-                    azureSubscription: '$(azureServiceConnection)'
-                    scriptType: bash
-                    scriptLocation: inlineScript
-                    inlineScript: |
-                      az deployment sub create \
-                        --location $(location) \
-                        --template-file infra/main.bicep \
-                        --parameters infra/main.dev.bicepparam \
-                        --name "deploy-dev-$(Build.BuildNumber)"
+  - template: templates/deploy-stage.yml
+    parameters:
+      environment: 'acc'
+      paramFile: 'main.acc.bicepparam'
+      serviceConnection: $(serviceConnection)
 
-                - task: AzureCLI@2
-                  displayName: 'Verify AKS Dev'
-                  inputs:
-                    azureSubscription: '$(azureServiceConnection)'
-                    scriptType: bash
-                    scriptLocation: inlineScript
-                    inlineScript: |
-                      CLUSTER_NAME=$(az deployment sub show \
-                        --name "deploy-dev-$(Build.BuildNumber)" \
-                        --query "properties.outputs.aksClusterName.value" -o tsv)
-                      RG_NAME=$(az deployment sub show \
-                        --name "deploy-dev-$(Build.BuildNumber)" \
-                        --query "properties.outputs.resourceGroupName.value" -o tsv)
-                      az aks show --name "$CLUSTER_NAME" --resource-group "$RG_NAME" --query "provisioningState" -o tsv
-
-  - stage: DeployAcc
-    displayName: 'Deploy Acceptatie'
-    dependsOn: DeployDev
-    jobs:
-      - deployment: Deploy
-        displayName: 'Deploy to Acceptatie'
-        environment: 'aks-acc'
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - checkout: self
-
-                - task: AzureCLI@2
-                  displayName: 'Deploy Acc Infrastructure'
-                  inputs:
-                    azureSubscription: '$(azureServiceConnection)'
-                    scriptType: bash
-                    scriptLocation: inlineScript
-                    inlineScript: |
-                      az deployment sub create \
-                        --location $(location) \
-                        --template-file infra/main.bicep \
-                        --parameters infra/main.acc.bicepparam \
-                        --name "deploy-acc-$(Build.BuildNumber)"
-
-                - task: AzureCLI@2
-                  displayName: 'Verify AKS Acc'
-                  inputs:
-                    azureSubscription: '$(azureServiceConnection)'
-                    scriptType: bash
-                    scriptLocation: inlineScript
-                    inlineScript: |
-                      CLUSTER_NAME=$(az deployment sub show \
-                        --name "deploy-acc-$(Build.BuildNumber)" \
-                        --query "properties.outputs.aksClusterName.value" -o tsv)
-                      RG_NAME=$(az deployment sub show \
-                        --name "deploy-acc-$(Build.BuildNumber)" \
-                        --query "properties.outputs.resourceGroupName.value" -o tsv)
-                      az aks show --name "$CLUSTER_NAME" --resource-group "$RG_NAME" --query "provisioningState" -o tsv
-
-  - stage: DeployProd
-    displayName: 'Deploy Productie'
-    dependsOn: DeployAcc
-    jobs:
-      - deployment: Deploy
-        displayName: 'Deploy to Productie'
-        environment: 'aks-prod'
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - checkout: self
-
-                - task: AzureCLI@2
-                  displayName: 'Deploy Prod Infrastructure'
-                  inputs:
-                    azureSubscription: '$(azureServiceConnection)'
-                    scriptType: bash
-                    scriptLocation: inlineScript
-                    inlineScript: |
-                      az deployment sub create \
-                        --location $(location) \
-                        --template-file infra/main.bicep \
-                        --parameters infra/main.prod.bicepparam \
-                        --name "deploy-prod-$(Build.BuildNumber)"
-
-                - task: AzureCLI@2
-                  displayName: 'Verify AKS Prod'
-                  inputs:
-                    azureSubscription: '$(azureServiceConnection)'
-                    scriptType: bash
-                    scriptLocation: inlineScript
-                    inlineScript: |
-                      CLUSTER_NAME=$(az deployment sub show \
-                        --name "deploy-prod-$(Build.BuildNumber)" \
-                        --query "properties.outputs.aksClusterName.value" -o tsv)
-                      RG_NAME=$(az deployment sub show \
-                        --name "deploy-prod-$(Build.BuildNumber)" \
-                        --query "properties.outputs.resourceGroupName.value" -o tsv)
-                      az aks show --name "$CLUSTER_NAME" --resource-group "$RG_NAME" --query "provisioningState" -o tsv
+  - template: templates/deploy-stage.yml
+    parameters:
+      environment: 'prod'
+      paramFile: 'main.prod.bicepparam'
+      serviceConnection: $(serviceConnection)
