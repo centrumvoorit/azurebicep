@@ -109,14 +109,14 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2024-09-01' = {
         maxCount: userNodeCount * 3
       }
     ]
-    addonProfiles: {
+    addonProfiles: !empty(logAnalyticsWorkspaceId) ? {
       omsagent: {
         enabled: true
         config: {
           logAnalyticsWorkspaceResourceID: logAnalyticsWorkspaceId
         }
       }
-    }
+    } : {}
     oidcIssuerProfile: {
       enabled: true
     }
@@ -136,7 +136,7 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2024-09-01' = {
   }
 }
 
-resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
   name: '${aksName}-diag'
   scope: aksCluster
   properties: {

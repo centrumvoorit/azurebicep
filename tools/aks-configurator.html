@@ -955,14 +955,14 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2024-09-01' = {
         maxCount: userNodeCount * 3
       }
     ]
-    addonProfiles: {
+    addonProfiles: !empty(logAnalyticsWorkspaceId) ? {
       omsagent: {
         enabled: true
         config: {
           logAnalyticsWorkspaceResourceID: logAnalyticsWorkspaceId
         }
       }
-    }
+    } : {}
     oidcIssuerProfile: {
       enabled: true
     }
@@ -982,7 +982,7 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2024-09-01' = {
   }
 }
 
-resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
   name: '\${aksName}-diag'
   scope: aksCluster
   properties: {
@@ -1252,7 +1252,7 @@ resource acr 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
   }
 }
 
-resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
   name: '\${acrName}-diag'
   scope: acr
   properties: {
@@ -1344,7 +1344,7 @@ resource keyVault 'Microsoft.KeyVault/vaults@2025-05-01' = {
   }
 }
 
-resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
   name: '\${keyVaultName}-diag'
   scope: keyVault
   properties: {
@@ -3501,6 +3501,10 @@ function generateDeploymentGuide(s) {
 // ============================================================
 
 function downloadAllZip() {
+  if (typeof JSZip === 'undefined') {
+    showBanner('ZIP download unavailable — JSZip library failed to load. Try individual downloads instead.');
+    return;
+  }
   var s = getFlatState();
   var env = s.environment || 'dev';
   var customerName = s.customerName || 'unnamed';
@@ -3529,6 +3533,9 @@ function downloadAllZip() {
     a.click();
     document.body.removeChild(a);
     setTimeout(function() { URL.revokeObjectURL(url); }, 100);
+  }).catch(function(err) {
+    console.error('Failed to generate ZIP', err);
+    showBanner('Failed to generate ZIP package. Try individual downloads instead.');
   });
 }
 
