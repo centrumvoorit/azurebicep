@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AKS Configurator</title>
 <script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
   .fade-out { animation: fadeOut 0.5s ease-out forwards; }
   @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
@@ -504,6 +505,1051 @@ const ECOSYSTEM_TOOLS = {
       }
     ]
   }
+};
+
+// ============================================================
+// BICEP TEMPLATES
+// ============================================================
+
+var BICEP_TEMPLATES = {
+  'types.bicep': `// ============================================================================
+// User-Defined Types for compile-time validation
+// Fouten worden in de IDE gevangen, niet na een 20-minuten pipeline run.
+// ============================================================================
+
+@export()
+@description('Deployment environment')
+type environmentType = 'dev' | 'acc' | 'prod'
+
+@export()
+@description('Standard resource tags \u2014 extra tags zijn toegestaan')
+type tagsType = {
+  CostCenter: string
+  Owner: string
+  Project: string
+  *: string
+}
+
+@export()
+@description('Network configuration for VNet and subnets')
+type networkConfigType = {
+  @description('Address prefix for the virtual network (e.g., 10.1.0.0/16)')
+  vnetAddressPrefix: string
+
+  @description('Address prefix for the AKS subnet (e.g., 10.1.0.0/20)')
+  aksSubnetPrefix: string
+
+  @description('Address prefix for the services subnet (e.g., 10.1.16.0/24)')
+  servicesSubnetPrefix: string
+
+  @description('Address prefix for the private endpoints subnet (e.g., 10.1.17.0/24)')
+  privateEndpointSubnetPrefix: string
+}
+
+@export()
+@description('AKS cluster configuration')
+type aksConfigType = {
+  @description('Kubernetes version (e.g., 1.30)')
+  kubernetesVersion: string
+
+  @description('System node pool VM count')
+  systemNodeCount: int
+
+  @description('System node pool VM size (e.g., Standard_D2s_v5)')
+  systemNodeVmSize: string
+
+  @description('User node pool VM count')
+  userNodeCount: int
+
+  @description('User node pool VM size (e.g., Standard_D4s_v5)')
+  userNodeVmSize: string
+
+  @description('Enable private AKS cluster (recommended for acc/prod)')
+  enablePrivateCluster: bool
+}
+
+@export()
+@description('Feature flags to enable or disable building blocks')
+type featureFlagsType = {
+  @description('Deploy Azure Container Registry')
+  deployAcr: bool
+
+  @description('Deploy Azure Key Vault')
+  deployKeyVault: bool
+
+  @description('Deploy Log Analytics and monitoring')
+  deployMonitoring: bool
+}
+
+@export()
+@description('ACR SKU tier')
+type acrSkuType = 'Basic' | 'Standard' | 'Premium'
+
+@export()
+@description('Key Vault SKU tier')
+type keyVaultSkuType = 'standard' | 'premium'
+
+@export()
+@description('Additional role assignment configuration')
+type roleAssignmentType = {
+  @description('Principal ID to assign the role to')
+  principalId: string
+
+  @description('Role definition ID (GUID)')
+  roleDefinitionId: string
+
+  @description('Principal type')
+  principalType: 'ServicePrincipal' | 'Group' | 'User'?
+}
+`,
+
+  'main.bicep': `targetScope = 'subscription'
+
+import {
+  environmentType
+  tagsType
+  networkConfigType
+  aksConfigType
+  featureFlagsType
+  acrSkuType
+  keyVaultSkuType
+  roleAssignmentType
+} from 'types.bicep'
+
+// ============================================================================
+// Parameters
+// ============================================================================
+
+@description('Customer name (short, lowercase, no special characters)')
+param customerName string
+
+@description('Environment name')
+param environment environmentType
+
+@description('Azure region for all resources')
+param location string
+
+@description('Tags to apply to all resources')
+param tags tagsType
+
+// Feature Flags
+@description('Feature flags to enable or disable building blocks')
+param features featureFlagsType
+
+// Network
+@description('Network configuration for VNet and subnets')
+param networkConfig networkConfigType
+
+// AKS
+@description('AKS cluster configuration')
+param aksConfig aksConfigType
+
+@description('Azure AD admin group object IDs for AKS cluster admin access')
+param adminGroupObjectIds array
+
+// ACR
+@description('ACR SKU')
+param acrSku acrSkuType
+
+// Key Vault
+@description('Key Vault SKU')
+param keyVaultSku keyVaultSkuType
+
+// Monitoring
+@description('Log Analytics retention in days')
+@minValue(30)
+@maxValue(730)
+param logRetentionDays int
+
+// Extensibility
+@description('Additional role assignments beyond the defaults')
+param additionalRoleAssignments roleAssignmentType[] = []
+
+// ============================================================================
+// Variables
+// ============================================================================
+
+var resourceGroupName = 'rg-\${customerName}-\${environment}-\${location}'
+var envTags = union(tags, {
+  Environment: environment
+  ManagedBy: 'Bicep'
+})
+
+// Well-known Azure role definition GUIDs
+var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+var networkContributorRoleId = '4d97b98b-1d4f-4787-a291-c67834d212e7'
+var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
+
+// ============================================================================
+// Resource Group
+// ============================================================================
+
+resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
+  name: resourceGroupName
+  location: location
+  tags: envTags
+}
+
+// ============================================================================
+// Modules
+// ============================================================================
+
+module network 'modules/network/vnet.bicep' = {
+  name: 'network-deployment'
+  scope: rg
+  params: {
+    location: location
+    tags: envTags
+    customerName: customerName
+    environment: environment
+    vnetAddressPrefix: networkConfig.vnetAddressPrefix
+    aksSubnetPrefix: networkConfig.aksSubnetPrefix
+    servicesSubnetPrefix: networkConfig.servicesSubnetPrefix
+    privateEndpointSubnetPrefix: networkConfig.privateEndpointSubnetPrefix
+  }
+}
+
+module identity 'modules/identity/managedIdentity.bicep' = {
+  name: 'identity-deployment'
+  scope: rg
+  params: {
+    location: location
+    tags: envTags
+    customerName: customerName
+    environment: environment
+  }
+}
+
+module monitoring 'modules/monitoring/logAnalytics.bicep' = if (features.deployMonitoring) {
+  name: 'monitoring-deployment'
+  scope: rg
+  params: {
+    location: location
+    tags: envTags
+    customerName: customerName
+    environment: environment
+    retentionDays: logRetentionDays
+  }
+}
+
+module acr 'modules/acr/containerRegistry.bicep' = if (features.deployAcr) {
+  name: 'acr-deployment'
+  scope: rg
+  params: {
+    location: location
+    tags: envTags
+    customerName: customerName
+    environment: environment
+    acrSku: acrSku
+    privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
+    vnetId: network.outputs.vnetId
+    logAnalyticsWorkspaceId: features.deployMonitoring ? monitoring.outputs.workspaceId : ''
+  }
+}
+
+module keyVault 'modules/keyvault/keyVault.bicep' = if (features.deployKeyVault) {
+  name: 'keyvault-deployment'
+  scope: rg
+  params: {
+    location: location
+    tags: envTags
+    customerName: customerName
+    environment: environment
+    skuName: keyVaultSku
+    privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
+    vnetId: network.outputs.vnetId
+    logAnalyticsWorkspaceId: features.deployMonitoring ? monitoring.outputs.workspaceId : ''
+    tenantId: tenant().tenantId
+  }
+}
+
+module aks 'modules/aks/aksCluster.bicep' = {
+  name: 'aks-deployment'
+  scope: rg
+  params: {
+    location: location
+    tags: envTags
+    customerName: customerName
+    environment: environment
+    kubernetesVersion: aksConfig.kubernetesVersion
+    aksSubnetId: network.outputs.aksSubnetId
+    logAnalyticsWorkspaceId: features.deployMonitoring ? monitoring.outputs.workspaceId : ''
+    userAssignedIdentityId: identity.outputs.identityId
+    enablePrivateCluster: aksConfig.enablePrivateCluster
+    systemNodeCount: aksConfig.systemNodeCount
+    systemNodeVmSize: aksConfig.systemNodeVmSize
+    userNodeCount: aksConfig.userNodeCount
+    userNodeVmSize: aksConfig.userNodeVmSize
+    adminGroupObjectIds: adminGroupObjectIds
+  }
+}
+
+// ============================================================================
+// Role Assignments
+// ============================================================================
+
+// AKS kubelet identity -> ACR Pull (only when ACR is deployed)
+module roleAcrPull 'modules/roleAssignment/roleAssignment.bicep' = if (features.deployAcr) {
+  name: 'role-acr-pull'
+  scope: rg
+  params: {
+    principalId: aks.outputs.kubeletIdentityObjectId
+    roleDefinitionId: acrPullRoleId
+  }
+}
+
+// AKS managed identity -> Network Contributor on VNet
+module roleNetworkContributor 'modules/roleAssignment/roleAssignment.bicep' = {
+  name: 'role-network-contributor'
+  scope: rg
+  params: {
+    principalId: identity.outputs.identityPrincipalId
+    roleDefinitionId: networkContributorRoleId
+  }
+}
+
+// AKS kubelet identity -> Key Vault Secrets User (only when Key Vault is deployed)
+module roleKeyVaultSecretsUser 'modules/roleAssignment/roleAssignment.bicep' = if (features.deployKeyVault) {
+  name: 'role-keyvault-secrets-user'
+  scope: rg
+  params: {
+    principalId: aks.outputs.kubeletIdentityObjectId
+    roleDefinitionId: keyVaultSecretsUserRoleId
+  }
+}
+
+// Additional role assignments (extensibility)
+module extraRoles 'modules/roleAssignment/roleAssignment.bicep' = [
+  for (role, i) in additionalRoleAssignments: {
+    name: 'role-extra-\${i}'
+    scope: rg
+    params: {
+      principalId: role.principalId
+      roleDefinitionId: role.roleDefinitionId
+      principalType: role.?principalType ?? 'ServicePrincipal'
+    }
+  }
+]
+
+// ============================================================================
+// Outputs
+// ============================================================================
+
+output resourceGroupName string = rg.name
+output aksClusterName string = aks.outputs.aksClusterName
+output aksOidcIssuerUrl string = aks.outputs.aksOidcIssuerUrl
+output vnetId string = network.outputs.vnetId
+output acrLoginServer string = features.deployAcr ? acr.outputs.acrLoginServer : ''
+output keyVaultUri string = features.deployKeyVault ? keyVault.outputs.keyVaultUri : ''
+output logAnalyticsWorkspaceId string = features.deployMonitoring ? monitoring.outputs.workspaceId : ''
+`,
+
+  'modules/aks/aksCluster.bicep': `@description('Azure region for all resources')
+param location string
+
+@description('Tags to apply to all resources')
+param tags object
+
+@description('Customer name used in resource naming')
+param customerName string
+
+@description('Environment name (dev, acc, prod)')
+@allowed(['dev', 'acc', 'prod'])
+param environment string
+
+@description('Kubernetes version')
+param kubernetesVersion string
+
+@description('Resource ID of the AKS subnet')
+param aksSubnetId string
+
+@description('Resource ID of the Log Analytics workspace')
+param logAnalyticsWorkspaceId string
+
+@description('Resource ID of the user-assigned managed identity')
+param userAssignedIdentityId string
+
+@description('Enable private cluster')
+param enablePrivateCluster bool
+
+@description('System node pool VM count')
+@minValue(1)
+param systemNodeCount int
+
+@description('System node pool VM size')
+param systemNodeVmSize string
+
+@description('User node pool VM count')
+@minValue(1)
+param userNodeCount int
+
+@description('User node pool VM size')
+param userNodeVmSize string
+
+@description('Azure AD admin group object IDs for cluster admin access')
+param adminGroupObjectIds array
+
+@description('DNS service IP address (must be within serviceCidr)')
+param dnsServiceIP string = '10.0.0.10'
+
+@description('Service CIDR for Kubernetes services')
+param serviceCidr string = '10.0.0.0/16'
+
+var aksName = 'aks-\${customerName}-\${environment}'
+
+resource aksCluster 'Microsoft.ContainerService/managedClusters@2024-09-01' = {
+  name: aksName
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '\${userAssignedIdentityId}': {}
+    }
+  }
+  properties: {
+    kubernetesVersion: kubernetesVersion
+    dnsPrefix: 'aks-\${customerName}-\${environment}'
+    disableLocalAccounts: true
+    aadProfile: {
+      managed: true
+      enableAzureRBAC: true
+      adminGroupObjectIDs: adminGroupObjectIds
+    }
+    apiServerAccessProfile: {
+      enablePrivateCluster: enablePrivateCluster
+    }
+    networkProfile: {
+      networkPlugin: 'azure'
+      networkPolicy: 'azure'
+      serviceCidr: serviceCidr
+      dnsServiceIP: dnsServiceIP
+      outboundType: 'loadBalancer'
+    }
+    agentPoolProfiles: [
+      {
+        name: 'system'
+        mode: 'System'
+        count: systemNodeCount
+        vmSize: systemNodeVmSize
+        osType: 'Linux'
+        osDiskSizeGB: 128
+        vnetSubnetID: aksSubnetId
+        enableAutoScaling: true
+        minCount: systemNodeCount
+        maxCount: systemNodeCount + 2
+        nodeTaints: [
+          'CriticalAddonsOnly=true:NoSchedule'
+        ]
+      }
+      {
+        name: 'user'
+        mode: 'User'
+        count: userNodeCount
+        vmSize: userNodeVmSize
+        osType: 'Linux'
+        osDiskSizeGB: 128
+        vnetSubnetID: aksSubnetId
+        enableAutoScaling: true
+        minCount: userNodeCount
+        maxCount: userNodeCount * 3
+      }
+    ]
+    addonProfiles: {
+      omsagent: {
+        enabled: true
+        config: {
+          logAnalyticsWorkspaceResourceID: logAnalyticsWorkspaceId
+        }
+      }
+    }
+    oidcIssuerProfile: {
+      enabled: true
+    }
+    securityProfile: {
+      workloadIdentity: {
+        enabled: true
+      }
+    }
+    autoScalerProfile: {
+      balanceSimilarNodeGroups: 'true'
+      expander: 'random'
+      maxGracefulTerminationSec: '600'
+      scaleDownDelayAfterAdd: '10m'
+      scaleDownUnneededTime: '10m'
+      scanInterval: '10s'
+    }
+  }
+}
+
+resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: '\${aksName}-diag'
+  scope: aksCluster
+  properties: {
+    workspaceId: logAnalyticsWorkspaceId
+    logs: [
+      {
+        categoryGroup: 'allLogs'
+        enabled: true
+      }
+    ]
+    metrics: [
+      {
+        category: 'AllMetrics'
+        enabled: true
+      }
+    ]
+  }
+}
+
+output aksClusterId string = aksCluster.id
+output aksClusterName string = aksCluster.name
+output aksOidcIssuerUrl string = aksCluster.properties.oidcIssuerProfile.issuerURL
+output kubeletIdentityObjectId string = aksCluster.properties.identityProfile.kubeletidentity.objectId
+`,
+
+  'modules/network/vnet.bicep': `@description('Azure region for all resources')
+param location string
+
+@description('Tags to apply to all resources')
+param tags object
+
+@description('Customer name used in resource naming')
+param customerName string
+
+@description('Environment name (dev, acc, prod)')
+@allowed(['dev', 'acc', 'prod'])
+param environment string
+
+@description('Address prefix for the virtual network')
+param vnetAddressPrefix string
+
+@description('Address prefix for the AKS subnet')
+param aksSubnetPrefix string
+
+@description('Address prefix for the services subnet')
+param servicesSubnetPrefix string
+
+@description('Address prefix for the private endpoints subnet')
+param privateEndpointSubnetPrefix string
+
+var vnetName = 'vnet-\${customerName}-\${environment}'
+var aksNsgName = 'nsg-aks-\${customerName}-\${environment}'
+var servicesNsgName = 'nsg-services-\${customerName}-\${environment}'
+var peNsgName = 'nsg-pe-\${customerName}-\${environment}'
+
+resource aksNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
+  name: aksNsgName
+  location: location
+  tags: tags
+  properties: {
+    securityRules: [
+      {
+        name: 'AllowVnetInbound'
+        properties: {
+          priority: 100
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: '*'
+          sourceAddressPrefix: 'VirtualNetwork'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'VirtualNetwork'
+          destinationPortRange: '*'
+        }
+      }
+      {
+        name: 'AllowAzureLoadBalancerInbound'
+        properties: {
+          priority: 110
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: '*'
+          sourceAddressPrefix: 'AzureLoadBalancer'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '*'
+        }
+      }
+      {
+        name: 'DenyAllInbound'
+        properties: {
+          priority: 4096
+          direction: 'Inbound'
+          access: 'Deny'
+          protocol: '*'
+          sourceAddressPrefix: 'Internet'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '*'
+        }
+      }
+    ]
+  }
+}
+
+resource servicesNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
+  name: servicesNsgName
+  location: location
+  tags: tags
+  properties: {
+    securityRules: [
+      {
+        name: 'AllowVnetInbound'
+        properties: {
+          priority: 100
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: '*'
+          sourceAddressPrefix: 'VirtualNetwork'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'VirtualNetwork'
+          destinationPortRange: '*'
+        }
+      }
+      {
+        name: 'DenyAllInbound'
+        properties: {
+          priority: 4096
+          direction: 'Inbound'
+          access: 'Deny'
+          protocol: '*'
+          sourceAddressPrefix: 'Internet'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '*'
+        }
+      }
+    ]
+  }
+}
+
+resource peNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
+  name: peNsgName
+  location: location
+  tags: tags
+  properties: {
+    securityRules: [
+      {
+        name: 'AllowVnetInbound'
+        properties: {
+          priority: 100
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: '*'
+          sourceAddressPrefix: 'VirtualNetwork'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'VirtualNetwork'
+          destinationPortRange: '*'
+        }
+      }
+      {
+        name: 'DenyAllInbound'
+        properties: {
+          priority: 4096
+          direction: 'Inbound'
+          access: 'Deny'
+          protocol: '*'
+          sourceAddressPrefix: 'Internet'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '*'
+        }
+      }
+    ]
+  }
+}
+
+resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
+  name: vnetName
+  location: location
+  tags: tags
+  properties: {
+    addressSpace: {
+      addressPrefixes: [
+        vnetAddressPrefix
+      ]
+    }
+    subnets: [
+      {
+        name: 'snet-aks'
+        properties: {
+          addressPrefix: aksSubnetPrefix
+          networkSecurityGroup: {
+            id: aksNsg.id
+          }
+        }
+      }
+      {
+        name: 'snet-services'
+        properties: {
+          addressPrefix: servicesSubnetPrefix
+          networkSecurityGroup: {
+            id: servicesNsg.id
+          }
+        }
+      }
+      {
+        name: 'snet-privateendpoints'
+        properties: {
+          addressPrefix: privateEndpointSubnetPrefix
+          networkSecurityGroup: {
+            id: peNsg.id
+          }
+          privateEndpointNetworkPolicies: 'Disabled'
+        }
+      }
+    ]
+  }
+}
+
+output vnetId string = vnet.id
+output vnetName string = vnet.name
+output aksSubnetId string = vnet.properties.subnets[0].id
+output servicesSubnetId string = vnet.properties.subnets[1].id
+output privateEndpointSubnetId string = vnet.properties.subnets[2].id
+`,
+
+  'modules/acr/containerRegistry.bicep': `@description('Azure region for all resources')
+param location string
+
+@description('Tags to apply to all resources')
+param tags object
+
+@description('Customer name used in resource naming')
+param customerName string
+
+@description('Environment name (dev, acc, prod)')
+@allowed(['dev', 'acc', 'prod'])
+param environment string
+
+@description('ACR SKU')
+@allowed(['Basic', 'Standard', 'Premium'])
+param acrSku string
+
+@description('Resource ID of the private endpoint subnet')
+param privateEndpointSubnetId string
+
+@description('Resource ID of the VNet for DNS zone linking')
+param vnetId string
+
+@description('Resource ID of the Log Analytics workspace')
+param logAnalyticsWorkspaceId string
+
+// ACR names cannot contain hyphens and must be globally unique
+var acrName = 'acr\${customerName}\${environment}'
+
+resource acr 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
+  name: acrName
+  location: location
+  tags: tags
+  sku: {
+    name: acrSku
+  }
+  properties: {
+    adminUserEnabled: false
+    publicNetworkAccess: acrSku == 'Premium' ? 'Disabled' : 'Enabled'
+    zoneRedundancy: acrSku == 'Premium' && environment == 'prod' ? 'Enabled' : 'Disabled'
+  }
+}
+
+resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: '\${acrName}-diag'
+  scope: acr
+  properties: {
+    workspaceId: logAnalyticsWorkspaceId
+    logs: [
+      {
+        categoryGroup: 'allLogs'
+        enabled: true
+      }
+    ]
+    metrics: [
+      {
+        category: 'AllMetrics'
+        enabled: true
+      }
+    ]
+  }
+}
+
+module privateEndpoint '../privateEndpoint/privateEndpoint.bicep' = if (acrSku == 'Premium') {
+  name: '\${acrName}-pe'
+  params: {
+    location: location
+    tags: tags
+    name: 'pe-\${acrName}'
+    subnetId: privateEndpointSubnetId
+    privateLinkServiceId: acr.id
+    groupIds: ['registry']
+    privateDnsZoneName: 'privatelink.azurecr.io'
+    vnetId: vnetId
+  }
+}
+
+output acrId string = acr.id
+output acrLoginServer string = acr.properties.loginServer
+output acrName string = acr.name
+`,
+
+  'modules/keyvault/keyVault.bicep': `@description('Azure region for all resources')
+param location string
+
+@description('Tags to apply to all resources')
+param tags object
+
+@description('Customer name used in resource naming')
+param customerName string
+
+@description('Environment name (dev, acc, prod)')
+@allowed(['dev', 'acc', 'prod'])
+param environment string
+
+@description('Key Vault SKU')
+@allowed(['standard', 'premium'])
+param skuName string
+
+@description('Resource ID of the private endpoint subnet')
+param privateEndpointSubnetId string
+
+@description('Resource ID of the VNet for DNS zone linking')
+param vnetId string
+
+@description('Resource ID of the Log Analytics workspace')
+param logAnalyticsWorkspaceId string
+
+@description('Azure AD tenant ID')
+param tenantId string
+
+var keyVaultName = 'kv-\${customerName}-\${environment}'
+
+resource keyVault 'Microsoft.KeyVault/vaults@2025-05-01' = {
+  name: keyVaultName
+  location: location
+  tags: tags
+  properties: {
+    sku: {
+      family: 'A'
+      name: skuName
+    }
+    tenantId: tenantId
+    enableRbacAuthorization: true
+    enableSoftDelete: true
+    softDeleteRetentionInDays: 90
+    enablePurgeProtection: true
+    publicNetworkAccess: 'Disabled'
+    networkAcls: {
+      defaultAction: 'Deny'
+      bypass: 'AzureServices'
+    }
+  }
+}
+
+resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: '\${keyVaultName}-diag'
+  scope: keyVault
+  properties: {
+    workspaceId: logAnalyticsWorkspaceId
+    logs: [
+      {
+        categoryGroup: 'allLogs'
+        enabled: true
+      }
+    ]
+    metrics: [
+      {
+        category: 'AllMetrics'
+        enabled: true
+      }
+    ]
+  }
+}
+
+module privateEndpoint '../privateEndpoint/privateEndpoint.bicep' = {
+  name: '\${keyVaultName}-pe'
+  params: {
+    location: location
+    tags: tags
+    name: 'pe-\${keyVaultName}'
+    subnetId: privateEndpointSubnetId
+    privateLinkServiceId: keyVault.id
+    groupIds: ['vault']
+    privateDnsZoneName: 'privatelink.vaultcore.azure.net'
+    vnetId: vnetId
+  }
+}
+
+output keyVaultId string = keyVault.id
+output keyVaultUri string = keyVault.properties.vaultUri
+output keyVaultName string = keyVault.name
+`,
+
+  'modules/monitoring/logAnalytics.bicep': `@description('Azure region for all resources')
+param location string
+
+@description('Tags to apply to all resources')
+param tags object
+
+@description('Customer name used in resource naming')
+param customerName string
+
+@description('Environment name (dev, acc, prod)')
+@allowed(['dev', 'acc', 'prod'])
+param environment string
+
+@description('Log retention in days')
+@minValue(30)
+@maxValue(730)
+param retentionDays int
+
+var workspaceName = 'log-\${customerName}-\${environment}'
+
+resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2025-07-01' = {
+  name: workspaceName
+  location: location
+  tags: tags
+  properties: {
+    sku: {
+      name: 'PerGB2018'
+    }
+    retentionInDays: retentionDays
+  }
+}
+
+output workspaceId string = logAnalytics.id
+output workspaceCustomerId string = logAnalytics.properties.customerId
+`,
+
+  'modules/identity/managedIdentity.bicep': `@description('Azure region for all resources')
+param location string
+
+@description('Tags to apply to all resources')
+param tags object
+
+@description('Customer name used in resource naming')
+param customerName string
+
+@description('Environment name (dev, acc, prod)')
+@allowed(['dev', 'acc', 'prod'])
+param environment string
+
+var identityName = 'id-aks-\${customerName}-\${environment}'
+
+resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
+  name: identityName
+  location: location
+  tags: tags
+}
+
+output identityId string = managedIdentity.id
+output identityPrincipalId string = managedIdentity.properties.principalId
+output identityClientId string = managedIdentity.properties.clientId
+`,
+
+  'modules/privateEndpoint/privateEndpoint.bicep': `@description('Azure region for all resources')
+param location string
+
+@description('Tags to apply to all resources')
+param tags object
+
+@description('Name for the private endpoint')
+param name string
+
+@description('Resource ID of the subnet for the private endpoint')
+param subnetId string
+
+@description('Resource ID of the service to connect to')
+param privateLinkServiceId string
+
+@description('Group IDs for the private link service (e.g., registry, vault)')
+param groupIds array
+
+@description('Name of the private DNS zone (e.g., privatelink.azurecr.io)')
+param privateDnsZoneName string
+
+@description('Resource ID of the VNet to link the DNS zone to')
+param vnetId string
+
+resource privateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
+  name: privateDnsZoneName
+  location: 'global'
+  tags: tags
+}
+
+resource vnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
+  parent: privateDnsZone
+  name: '\${name}-vnet-link'
+  location: 'global'
+  tags: tags
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: {
+      id: vnetId
+    }
+  }
+}
+
+resource privateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = {
+  name: name
+  location: location
+  tags: tags
+  properties: {
+    subnet: {
+      id: subnetId
+    }
+    privateLinkServiceConnections: [
+      {
+        name: name
+        properties: {
+          privateLinkServiceId: privateLinkServiceId
+          groupIds: groupIds
+        }
+      }
+    ]
+  }
+}
+
+resource dnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = {
+  parent: privateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: privateDnsZoneName
+        properties: {
+          privateDnsZoneId: privateDnsZone.id
+        }
+      }
+    ]
+  }
+}
+
+output privateEndpointId string = privateEndpoint.id
+output privateDnsZoneId string = privateDnsZone.id
+`,
+
+  'modules/roleAssignment/roleAssignment.bicep': `@description('Principal ID to assign the role to')
+param principalId string
+
+@description('Role definition ID (GUID only, e.g., acdd72a7-3385-48ef-bd42-f606fba81ae7 for Reader)')
+param roleDefinitionId string
+
+@description('Principal type')
+@allowed(['ServicePrincipal', 'Group', 'User'])
+param principalType string = 'ServicePrincipal'
+
+var roleAssignmentName = guid(principalId, roleDefinitionId, resourceGroup().id)
+
+resource roleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: roleAssignmentName
+  properties: {
+    principalId: principalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleDefinitionId)
+    principalType: principalType
+  }
+}
+
+output roleAssignmentId string = roleAssignment.id
+`
 };
 
 // ============================================================
@@ -2032,13 +3078,33 @@ function renderStep7() {
   var bicepFilename = 'main.' + env + '.bicepparam';
   var guideFilename = 'deployment-guide-' + (s.customerName || 'unnamed') + '-' + env + '.md';
 
+  // Generated Files overview
+  html += '<div class="mt-6">' +
+    '<h3 class="text-base font-semibold text-gray-700 mb-3">Generated Files</h3>' +
+    '<div class="bg-gray-50 border border-gray-200 rounded-lg p-4">' +
+    '<pre class="text-xs font-mono text-gray-700 leading-relaxed">infra/\n' +
+    '\u251C\u2500\u2500 main.bicep\n' +
+    '\u251C\u2500\u2500 types.bicep\n' +
+    '\u251C\u2500\u2500 main.' + escapeHtml(env) + '.bicepparam\n' +
+    '\u2514\u2500\u2500 modules/\n' +
+    '    \u251C\u2500\u2500 aks/aksCluster.bicep\n' +
+    '    \u251C\u2500\u2500 network/vnet.bicep\n' +
+    '    \u251C\u2500\u2500 acr/containerRegistry.bicep\n' +
+    '    \u251C\u2500\u2500 keyvault/keyVault.bicep\n' +
+    '    \u251C\u2500\u2500 monitoring/logAnalytics.bicep\n' +
+    '    \u251C\u2500\u2500 identity/managedIdentity.bicep\n' +
+    '    \u251C\u2500\u2500 privateEndpoint/privateEndpoint.bicep\n' +
+    '    \u2514\u2500\u2500 roleAssignment/roleAssignment.bicep\n' +
+    'deployment-guide.md</pre>' +
+    '</div></div>';
+
   // .bicepparam preview
   html += '<div class="mt-6">' +
     '<div class="flex items-center justify-between mb-2">' +
       '<h3 class="text-base font-semibold text-gray-700">.bicepparam Preview</h3>' +
       '<div class="flex gap-2">' +
         '<button onclick="copyToClipboard(generateBicepParam(getFlatState()))" class="px-3 py-1 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50">Copy</button>' +
-        '<button onclick="downloadFile(\'' + escapeHtml(bicepFilename) + '\', generateBicepParam(getFlatState()))" class="px-3 py-1 text-xs rounded border border-blue-300 text-blue-600 hover:bg-blue-50">Download</button>' +
+        '<button onclick="downloadFile(\'' + escapeHtml(bicepFilename) + '\', generateBicepParam(getFlatState()))" class="px-3 py-1 text-xs rounded border border-blue-300 text-blue-600 hover:bg-blue-50">Download .bicepparam</button>' +
       '</div>' +
     '</div>' +
     '<pre class="bg-gray-900 text-green-400 rounded-lg p-4 text-xs font-mono overflow-x-auto max-h-96 overflow-y-auto">' + escapeHtml(bicepContent) + '</pre>' +
@@ -2050,17 +3116,24 @@ function renderStep7() {
       '<h3 class="text-base font-semibold text-gray-700">Deployment Guide Preview</h3>' +
       '<div class="flex gap-2">' +
         '<button onclick="copyToClipboard(generateDeploymentGuide(getFlatState()))" class="px-3 py-1 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50">Copy</button>' +
-        '<button onclick="downloadFile(\'' + escapeHtml(guideFilename) + '\', generateDeploymentGuide(getFlatState()))" class="px-3 py-1 text-xs rounded border border-blue-300 text-blue-600 hover:bg-blue-50">Download</button>' +
+        '<button onclick="downloadFile(\'' + escapeHtml(guideFilename) + '\', generateDeploymentGuide(getFlatState()))" class="px-3 py-1 text-xs rounded border border-blue-300 text-blue-600 hover:bg-blue-50">Download Guide</button>' +
       '</div>' +
     '</div>' +
     '<pre class="bg-gray-50 border border-gray-200 rounded-lg p-4 text-xs font-mono overflow-x-auto max-h-96 overflow-y-auto text-gray-800">' + escapeHtml(guideContent) + '</pre>' +
   '</div>';
 
+  // Individual download: main.bicep
+  html += '<div class="mt-4 flex items-center gap-3">' +
+    '<button onclick="downloadFile(\'main.bicep\', BICEP_TEMPLATES[\'main.bicep\'])" class="px-3 py-1 text-xs rounded border border-blue-300 text-blue-600 hover:bg-blue-50">Download main.bicep</button>' +
+    '<span class="text-xs text-gray-400">Download the main orchestration template individually</span>' +
+  '</div>';
+
   // Download All button
   html += '<div class="mt-6 text-center">' +
-    '<button onclick="downloadFile(\'' + escapeHtml(bicepFilename) + '\', generateBicepParam(getFlatState())); setTimeout(function(){ downloadFile(\'' + escapeHtml(guideFilename) + '\', generateDeploymentGuide(getFlatState())); }, 500);" ' +
+    '<button onclick="downloadAllZip()" ' +
     'class="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium text-sm">' +
-    'Download All Files</button>' +
+    'Download Complete Package (.zip)</button>' +
+    '<p class="text-xs text-gray-400 mt-2">Downloads a zip file with all Bicep templates, parameters, and deployment guide</p>' +
   '</div>';
 
   return html;
@@ -2426,6 +3499,38 @@ function generateDeploymentGuide(s) {
 // ============================================================
 // DOWNLOAD / COPY HELPERS
 // ============================================================
+
+function downloadAllZip() {
+  var s = getFlatState();
+  var env = s.environment || 'dev';
+  var customerName = s.customerName || 'unnamed';
+  var zip = new JSZip();
+
+  // Add all Bicep template files under infra/
+  var templateKeys = Object.keys(BICEP_TEMPLATES);
+  for (var i = 0; i < templateKeys.length; i++) {
+    zip.file('infra/' + templateKeys[i], BICEP_TEMPLATES[templateKeys[i]]);
+  }
+
+  // Add the generated .bicepparam file
+  var bicepParamFilename = 'main.' + env + '.bicepparam';
+  zip.file('infra/' + bicepParamFilename, generateBicepParam(s));
+
+  // Add the deployment guide
+  zip.file('deployment-guide.md', generateDeploymentGuide(s));
+
+  // Generate and download
+  zip.generateAsync({ type: 'blob' }).then(function(blob) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'aks-deployment-' + customerName + '-' + env + '.zip';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function() { URL.revokeObjectURL(url); }, 100);
+  });
+}
 
 function downloadFile(filename, content) {
   var blob = new Blob([content], { type: 'text/plain' });
