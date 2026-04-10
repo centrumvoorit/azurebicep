@@ -721,6 +721,47 @@ function validateStep(stepNum) {
       }
     }
   }
+  if (stepNum === 4) {
+    var sysAuto = getVal('systemAutoscaling');
+    if (sysAuto) {
+      var sMinCount = getVal('systemNodeMinCount');
+      var sMaxCount = getVal('systemNodeMaxCount');
+      if (!sMinCount || sMinCount < 1) {
+        result.errors.push('System pool minimum node count must be at least 1.');
+      }
+      if (!sMaxCount || sMaxCount < 1) {
+        result.errors.push('System pool maximum node count must be at least 1.');
+      }
+      if (sMinCount >= 1 && sMaxCount >= 1 && sMaxCount < sMinCount) {
+        result.errors.push('System pool maximum node count must be greater than or equal to minimum node count.');
+      }
+    } else {
+      var sCount = getVal('systemNodeCount');
+      if (!sCount || sCount < 1) {
+        result.errors.push('System pool node count must be at least 1.');
+      }
+    }
+
+    var userAuto = getVal('userAutoscaling');
+    if (userAuto) {
+      var uMinCount = getVal('userNodeMinCount');
+      var uMaxCount = getVal('userNodeMaxCount');
+      if (!uMinCount || uMinCount < 1) {
+        result.errors.push('User pool minimum node count must be at least 1.');
+      }
+      if (!uMaxCount || uMaxCount < 1) {
+        result.errors.push('User pool maximum node count must be at least 1.');
+      }
+      if (uMinCount >= 1 && uMaxCount >= 1 && uMaxCount < uMinCount) {
+        result.errors.push('User pool maximum node count must be greater than or equal to minimum node count.');
+      }
+    } else {
+      var uCount = getVal('userNodeCount');
+      if (!uCount || uCount < 1) {
+        result.errors.push('User pool node count must be at least 1.');
+      }
+    }
+  }
   return result;
 }
 
@@ -1418,8 +1459,193 @@ function renderStep3() {
     warningsHtml(validation.warnings);
 }
 function renderStep4() {
-  return '<h2 class="text-xl font-bold text-gray-800 mb-4">Step 4: Compute</h2><p class="text-gray-500">Coming in next build...</p>';
+  var inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500';
+  var inputSmCls = 'w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500';
+
+  var validation = validateStep(4);
+
+  var sysVmSize = getVal('systemNodeVmSize') || 'Standard_D2s_v5';
+  var sysAutoscaling = getVal('systemAutoscaling');
+  var sysCount = getVal('systemNodeCount') !== undefined ? getVal('systemNodeCount') : 1;
+  var sysMin = getVal('systemNodeMinCount') !== undefined ? getVal('systemNodeMinCount') : 1;
+  var sysMax = getVal('systemNodeMaxCount') !== undefined ? getVal('systemNodeMaxCount') : 3;
+
+  var userVmSize = getVal('userNodeVmSize') || 'Standard_D4s_v5';
+  var userAutoscaling = getVal('userAutoscaling');
+  var userCount = getVal('userNodeCount') !== undefined ? getVal('userNodeCount') : 1;
+  var userMin = getVal('userNodeMinCount') !== undefined ? getVal('userNodeMinCount') : 1;
+  var userMax = getVal('userNodeMaxCount') !== undefined ? getVal('userNodeMaxCount') : 5;
+
+  var osDisk = getVal('osDiskSizeGB') !== undefined ? getVal('osDiskSizeGB') : 128;
+  var zones = getVal('availabilityZones') || [];
+  var upgradeChannel = getVal('upgradeChannel') || 'patch';
+  var maxPods = getVal('maxPodsPerNode') !== undefined ? getVal('maxPodsPerNode') : 110;
+
+  // VM size select options builder
+  function vmSizeOptions(selectedName) {
+    var opts = '';
+    for (var i = 0; i < VM_SIZES.length; i++) {
+      var vm = VM_SIZES[i];
+      var label = vm.name + ' (' + vm.vCPU + ' vCPU / ' + vm.ram + ' GB RAM)';
+      opts += '<option value="' + vm.name + '"' + (vm.name === selectedName ? ' selected' : '') + '>' + label + '</option>';
+    }
+    return opts;
+  }
+
+  // Autoscaling toggle builder
+  function autoscalingToggle(key, isOn) {
+    var onCls = isOn
+      ? 'px-4 py-2 text-sm rounded-l-lg border border-blue-600 bg-blue-600 text-white font-medium'
+      : 'px-4 py-2 text-sm rounded-l-lg border border-gray-300 text-gray-600 hover:bg-gray-50';
+    var offCls = !isOn
+      ? 'px-4 py-2 text-sm rounded-r-lg border border-blue-600 bg-blue-600 text-white font-medium'
+      : 'px-4 py-2 text-sm rounded-r-lg border border-gray-300 text-gray-600 hover:bg-gray-50';
+    return '<div class="flex">' +
+      '<button onclick="setVal(\'' + key + '\', true)" class="' + onCls + '">Enabled</button>' +
+      '<button onclick="setVal(\'' + key + '\', false)" class="' + offCls + '">Disabled</button>' +
+    '</div>';
+  }
+
+  // Node count fields for system pool
+  var sysCountFields = sysAutoscaling
+    ? '<div class="flex gap-4 items-end mt-3">' +
+        '<div>' +
+          '<label class="block text-xs text-gray-500 mb-1">Min Nodes ' + badge('params') + '</label>' +
+          '<input type="number" min="1" value="' + sysMin + '" oninput="setVal(\'systemNodeMinCount\', parseInt(this.value)||1)" class="' + inputSmCls + '">' +
+        '</div>' +
+        '<div>' +
+          '<label class="block text-xs text-gray-500 mb-1">Max Nodes ' + badge('params') + '</label>' +
+          '<input type="number" min="1" value="' + sysMax + '" oninput="setVal(\'systemNodeMaxCount\', parseInt(this.value)||1)" class="' + inputSmCls + '">' +
+        '</div>' +
+      '</div>'
+    : '<div class="mt-3">' +
+        '<label class="block text-xs text-gray-500 mb-1">Node Count ' + badge('params') + '</label>' +
+        '<input type="number" min="1" value="' + sysCount + '" oninput="setVal(\'systemNodeCount\', parseInt(this.value)||1)" class="' + inputSmCls + '">' +
+      '</div>';
+
+  // Node count fields for user pool
+  var userCountFields = userAutoscaling
+    ? '<div class="flex gap-4 items-end mt-3">' +
+        '<div>' +
+          '<label class="block text-xs text-gray-500 mb-1">Min Nodes ' + badge('params') + '</label>' +
+          '<input type="number" min="1" value="' + userMin + '" oninput="setVal(\'userNodeMinCount\', parseInt(this.value)||1)" class="' + inputSmCls + '">' +
+        '</div>' +
+        '<div>' +
+          '<label class="block text-xs text-gray-500 mb-1">Max Nodes ' + badge('params') + '</label>' +
+          '<input type="number" min="1" value="' + userMax + '" oninput="setVal(\'userNodeMaxCount\', parseInt(this.value)||1)" class="' + inputSmCls + '">' +
+        '</div>' +
+      '</div>'
+    : '<div class="mt-3">' +
+        '<label class="block text-xs text-gray-500 mb-1">Node Count ' + badge('params') + '</label>' +
+        '<input type="number" min="1" value="' + userCount + '" oninput="setVal(\'userNodeCount\', parseInt(this.value)||1)" class="' + inputSmCls + '">' +
+      '</div>';
+
+  // Upgrade channel options
+  var channelOptions = '';
+  for (var ci = 0; ci < UPGRADE_CHANNELS.length; ci++) {
+    channelOptions += '<option value="' + UPGRADE_CHANNELS[ci] + '"' + (UPGRADE_CHANNELS[ci] === upgradeChannel ? ' selected' : '') + '>' + UPGRADE_CHANNELS[ci] + '</option>';
+  }
+
+  // Availability zones checkboxes
+  var zonesHtml = '';
+  for (var z = 1; z <= 3; z++) {
+    var zStr = String(z);
+    var checked = zones.indexOf(zStr) !== -1;
+    zonesHtml += '<label class="flex items-center gap-2 cursor-pointer mr-4">' +
+      '<input type="checkbox"' + (checked ? ' checked' : '') + ' onchange="toggleZone(\'' + zStr + '\')" class="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">' +
+      '<span class="text-sm text-gray-700">Zone ' + zStr + '</span>' +
+    '</label>';
+  }
+
+  return '<h2 class="text-xl font-bold text-gray-800 mb-1">Step 4: Compute / Node Pools</h2>' +
+    '<p class="text-sm text-gray-500 mb-6">Configure VM sizes, autoscaling, and node pool settings for system and user workloads.</p>' +
+
+    // System Pool
+    '<div class="border border-gray-200 rounded-lg p-5 mb-6">' +
+      '<h3 class="text-base font-semibold text-gray-700 mb-4">System Node Pool</h3>' +
+      '<p class="text-xs text-gray-500 mb-4">Hosts Kubernetes system components (kube-system). Requires at least 1 node at all times.</p>' +
+
+      fieldRow('VM Size',
+        '<select onchange="setVal(\'systemNodeVmSize\', this.value)" class="' + inputCls + '">' + vmSizeOptions(sysVmSize) + '</select>',
+        'params',
+        'Virtual machine size for system pool nodes.') +
+
+      fieldRow('Autoscaling',
+        autoscalingToggle('systemAutoscaling', sysAutoscaling) + sysCountFields,
+        'params',
+        sysAutoscaling ? 'Cluster autoscaler will scale system nodes within the min/max range.' : 'Fixed node count. Cluster autoscaler is disabled for this pool.') +
+    '</div>' +
+
+    // User Pool
+    '<div class="border border-gray-200 rounded-lg p-5 mb-6">' +
+      '<h3 class="text-base font-semibold text-gray-700 mb-4">User Node Pool</h3>' +
+      '<p class="text-xs text-gray-500 mb-4">Hosts application workloads. Can be scaled independently from the system pool.</p>' +
+
+      fieldRow('VM Size',
+        '<select onchange="setVal(\'userNodeVmSize\', this.value)" class="' + inputCls + '">' + vmSizeOptions(userVmSize) + '</select>',
+        'params',
+        'Virtual machine size for user pool nodes.') +
+
+      fieldRow('Autoscaling',
+        autoscalingToggle('userAutoscaling', userAutoscaling) + userCountFields,
+        'params',
+        userAutoscaling ? 'Cluster autoscaler will scale user nodes within the min/max range.' : 'Fixed node count. Cluster autoscaler is disabled for this pool.') +
+    '</div>' +
+
+    // Shared Settings
+    '<div class="mb-6">' +
+      '<h3 class="text-base font-semibold text-gray-700 mb-4">Shared Settings</h3>' +
+
+      fieldRow('OS Disk Size (GB)',
+        '<div class="flex items-center gap-4">' +
+          '<input type="range" min="30" max="1024" value="' + osDisk + '" oninput="setVal(\'osDiskSizeGB\', parseInt(this.value)); document.getElementById(\'osDiskVal\').textContent = this.value + \' GB\'" class="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600">' +
+          '<span id="osDiskVal" class="text-sm font-mono text-gray-700 w-20 text-right">' + osDisk + ' GB</span>' +
+        '</div>',
+        'params',
+        'OS disk size for all node pool VMs. Range: 30–1024 GB.') +
+
+      fieldRow('Availability Zones',
+        '<div class="flex items-center flex-wrap gap-1 mb-1">' + zonesHtml + '</div>' +
+        '<p class="text-xs text-gray-500 mt-1">Not in current modules</p>',
+        'guide',
+        'Distribute nodes across availability zones for higher resilience. Requires zone-redundant VM sizes and storage.') +
+    '</div>' +
+
+    // Advanced collapsible
+    '<details class="border border-gray-200 rounded-lg mb-6">' +
+      '<summary class="px-4 py-3 cursor-pointer text-sm font-semibold text-gray-700 hover:bg-gray-50 rounded-lg select-none">Advanced Settings</summary>' +
+      '<div class="px-4 pb-4 pt-2 border-t border-gray-200">' +
+
+        fieldRow('Upgrade Channel ' + badge('guide'),
+          '<select onchange="setVal(\'upgradeChannel\', this.value)" class="' + inputCls + '">' + channelOptions + '</select>' +
+          '<p class="text-xs text-gray-500 mt-1">Not in current modules</p>',
+          null,
+          'Controls automatic Kubernetes version upgrades. "patch" upgrades to latest patch release; "stable" to stable minor; "rapid" to latest minor; "node-image" only upgrades node OS image.') +
+
+        fieldRow('Max Pods Per Node ' + badge('guide'),
+          '<input type="number" min="10" max="250" value="' + maxPods + '" oninput="setVal(\'maxPodsPerNode\', parseInt(this.value)||110)" class="' + inputCls + '">' +
+          '<p class="text-xs text-gray-500 mt-1">Not in current modules</p>',
+          null,
+          'Maximum number of pods that can run on a single node. Range: 10–250. Default: 110. Affects AKS subnet IP requirements.') +
+
+      '</div>' +
+    '</details>' +
+
+    errorsHtml(validation.errors) +
+    warningsHtml(validation.warnings);
 }
+function toggleZone(zone) {
+  var zones = (getVal('availabilityZones') || []).slice();
+  var idx = zones.indexOf(zone);
+  if (idx === -1) {
+    zones.push(zone);
+  } else {
+    zones.splice(idx, 1);
+  }
+  zones.sort();
+  setVal('availabilityZones', zones);
+}
+
 function renderStep5() {
   return '<h2 class="text-xl font-bold text-gray-800 mb-4">Step 5: Platform Services</h2><p class="text-gray-500">Coming in next build...</p>';
 }
