@@ -637,6 +637,29 @@ function validateStep(stepNum) {
       result.errors.push('Region is required.');
     }
   }
+  if (stepNum === 2) {
+    var ids = getVal('adminGroupObjectIds') || [];
+    var nonEmpty = ids.filter(function(id) { return id.trim() !== ''; });
+    if (nonEmpty.length === 0) {
+      result.errors.push('At least one Admin Group Object ID is required.');
+    } else {
+      var guidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      for (var i = 0; i < nonEmpty.length; i++) {
+        if (!guidRe.test(nonEmpty[i].trim())) {
+          result.errors.push('Admin Group Object ID "' + escapeHtml(nonEmpty[i]) + '" is not a valid GUID (expected format: 00000000-0000-0000-0000-000000000000).');
+        }
+      }
+    }
+    if (!getVal('tagCostCenter')) {
+      result.errors.push('Tag: CostCenter is required.');
+    }
+    if (!getVal('tagOwner')) {
+      result.errors.push('Tag: Owner is required.');
+    }
+    if (!getVal('tagProject')) {
+      result.errors.push('Tag: Project is required.');
+    }
+  }
   return result;
 }
 
@@ -872,6 +895,68 @@ function escapeHtml(text) {
 }
 
 // ============================================================
+// ARRAY / OBJECT MUTATORS (Step 2)
+// ============================================================
+
+function updateArrayItem(key, index, value) {
+  var arr = (getVal(key) || []).slice();
+  arr[index] = value;
+  setVal(key, arr);
+}
+
+function addArrayItem(key) {
+  var arr = (getVal(key) || []).slice();
+  arr.push('');
+  setVal(key, arr);
+}
+
+function removeArrayItem(key, index) {
+  var arr = (getVal(key) || []).slice();
+  if (arr.length <= 1) {
+    arr = [''];
+  } else {
+    arr.splice(index, 1);
+  }
+  setVal(key, arr);
+}
+
+function updateCustomTag(index, field, value) {
+  var tags = (getVal('customTags') || []).map(function(t) { return Object.assign({}, t); });
+  tags[index][field] = value;
+  setVal('customTags', tags);
+}
+
+function addCustomTag() {
+  var tags = (getVal('customTags') || []).map(function(t) { return Object.assign({}, t); });
+  tags.push({ key: '', value: '' });
+  setVal('customTags', tags);
+}
+
+function removeCustomTag(index) {
+  var tags = (getVal('customTags') || []).map(function(t) { return Object.assign({}, t); });
+  tags.splice(index, 1);
+  setVal('customTags', tags);
+}
+
+function updateRoleAssignment(index, field, value) {
+  var roles = (getVal('additionalRoleAssignments') || []).map(function(r) { return Object.assign({}, r); });
+  roles[index][field] = value;
+  setVal('additionalRoleAssignments', roles);
+}
+
+function addRoleAssignment() {
+  var roles = (getVal('additionalRoleAssignments') || []).map(function(r) { return Object.assign({}, r); });
+  roles.push({ principalId: '', roleDefinitionId: '', principalType: 'ServicePrincipal' });
+  setVal('additionalRoleAssignments', roles);
+}
+
+function removeRoleAssignment(index) {
+  var roles = (getVal('additionalRoleAssignments') || []).map(function(r) { return Object.assign({}, r); });
+  roles.splice(index, 1);
+  setVal('additionalRoleAssignments', roles);
+}
+
+// ============================================================
 // STEP_RENDERERS
 // ============================================================
 
@@ -949,7 +1034,143 @@ function renderStep1() {
 }
 
 function renderStep2() {
-  return '<h2 class="text-xl font-bold text-gray-800 mb-4">Step 2: Access &amp; Governance</h2><p class="text-gray-500">Coming in next build...</p>';
+  var inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500';
+  var inputSmCls = 'flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500';
+  var btnDangerCls = 'px-2 py-1.5 text-xs border border-red-300 text-red-600 rounded hover:bg-red-50 flex-shrink-0';
+  var btnAddCls = 'mt-2 px-3 py-1.5 text-xs border border-blue-300 text-blue-600 rounded hover:bg-blue-50';
+
+  var validation = validateStep(2);
+
+  // --- Admin Group Object IDs ---
+  var adminIds = getVal('adminGroupObjectIds') || [];
+  if (adminIds.length === 0) adminIds = [''];
+  var adminRowsHtml = '';
+  for (var i = 0; i < adminIds.length; i++) {
+    var idVal = escapeHtml(adminIds[i]);
+    adminRowsHtml +=
+      '<div class="flex gap-2 mb-2">' +
+        '<input type="text" value="' + idVal + '" placeholder="00000000-0000-0000-0000-000000000000"' +
+          ' oninput="updateArrayItem(\'adminGroupObjectIds\',' + i + ',this.value)"' +
+          ' class="' + inputSmCls + ' font-mono">' +
+        '<button onclick="removeArrayItem(\'adminGroupObjectIds\',' + i + ')" class="' + btnDangerCls + '" title="Remove">&#x2715;</button>' +
+      '</div>';
+  }
+  var adminGroupField = adminRowsHtml +
+    '<button onclick="addArrayItem(\'adminGroupObjectIds\')" class="' + btnAddCls + '">+ Add Group ID</button>';
+
+  // --- Required Tags ---
+  var tagCostCenter = escapeHtml(getVal('tagCostCenter') || '');
+  var tagOwner = escapeHtml(getVal('tagOwner') || '');
+  var tagProject = escapeHtml(getVal('tagProject') || '');
+
+  // --- Custom Tags ---
+  var customTags = getVal('customTags') || [];
+  var customTagRowsHtml = '';
+  for (var j = 0; j < customTags.length; j++) {
+    var tagKey = escapeHtml(customTags[j].key || '');
+    var tagVal = escapeHtml(customTags[j].value || '');
+    customTagRowsHtml +=
+      '<div class="flex gap-2 mb-2 items-center">' +
+        '<input type="text" value="' + tagKey + '" placeholder="Key"' +
+          ' oninput="updateCustomTag(' + j + ',\'key\',this.value)"' +
+          ' class="' + inputSmCls + '">' +
+        '<span class="text-gray-400 text-sm flex-shrink-0">=</span>' +
+        '<input type="text" value="' + tagVal + '" placeholder="Value"' +
+          ' oninput="updateCustomTag(' + j + ',\'value\',this.value)"' +
+          ' class="' + inputSmCls + '">' +
+        '<button onclick="removeCustomTag(' + j + ')" class="' + btnDangerCls + '" title="Remove">&#x2715;</button>' +
+      '</div>';
+  }
+  var customTagsField = customTagRowsHtml +
+    '<button onclick="addCustomTag()" class="' + btnAddCls + '">+ Add Tag</button>';
+
+  // --- Additional Role Assignments ---
+  var roleAssignments = getVal('additionalRoleAssignments') || [];
+  var roleRowsHtml = '';
+  for (var k = 0; k < roleAssignments.length; k++) {
+    var principalId = escapeHtml(roleAssignments[k].principalId || '');
+    var roleDefId = escapeHtml(roleAssignments[k].roleDefinitionId || '');
+    var principalType = roleAssignments[k].principalType || 'ServicePrincipal';
+    roleRowsHtml +=
+      '<div class="border border-gray-200 rounded-lg p-3 mb-2 bg-gray-50">' +
+        '<div class="flex gap-2 mb-2">' +
+          '<div class="flex-1">' +
+            '<label class="text-xs text-gray-500 mb-1 block">Principal ID (GUID)</label>' +
+            '<input type="text" value="' + principalId + '" placeholder="00000000-0000-0000-0000-000000000000"' +
+              ' oninput="updateRoleAssignment(' + k + ',\'principalId\',this.value)"' +
+              ' class="' + inputCls + ' font-mono">' +
+          '</div>' +
+          '<button onclick="removeRoleAssignment(' + k + ')" class="' + btnDangerCls + ' self-end" title="Remove row">&#x2715;</button>' +
+        '</div>' +
+        '<div class="flex gap-2">' +
+          '<div class="flex-1">' +
+            '<label class="text-xs text-gray-500 mb-1 block">Role Definition ID (GUID)</label>' +
+            '<input type="text" value="' + roleDefId + '" placeholder="00000000-0000-0000-0000-000000000000"' +
+              ' oninput="updateRoleAssignment(' + k + ',\'roleDefinitionId\',this.value)"' +
+              ' class="' + inputCls + ' font-mono">' +
+          '</div>' +
+          '<div class="w-44">' +
+            '<label class="text-xs text-gray-500 mb-1 block">Principal Type</label>' +
+            '<select onchange="updateRoleAssignment(' + k + ',\'principalType\',this.value)" class="' + inputCls + '">' +
+              '<option value="ServicePrincipal"' + (principalType === 'ServicePrincipal' ? ' selected' : '') + '>ServicePrincipal</option>' +
+              '<option value="Group"' + (principalType === 'Group' ? ' selected' : '') + '>Group</option>' +
+              '<option value="User"' + (principalType === 'User' ? ' selected' : '') + '>User</option>' +
+            '</select>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+  }
+  var roleAssignmentsField = roleRowsHtml +
+    '<button onclick="addRoleAssignment()" class="' + btnAddCls + '">+ Add Role Assignment</button>';
+
+  return '<h2 class="text-xl font-bold text-gray-800 mb-1">Step 2: Access &amp; Governance</h2>' +
+    '<p class="text-sm text-gray-500 mb-6">Configure cluster admin groups, resource tags, and additional RBAC assignments.</p>' +
+
+    infoPanel('Azure RBAC is enabled. Local accounts are disabled. Workload Identity and OIDC issuer are enabled by default.') +
+    '<div class="mb-6"></div>' +
+
+    fieldRow('Admin Group Object IDs',
+      adminGroupField,
+      'params',
+      'Azure AD group object IDs granted cluster-admin access. GUID format required (00000000-0000-0000-0000-000000000000). At least one required.') +
+
+    '<h3 class="text-base font-semibold text-gray-700 mb-3 mt-6">Required Tags</h3>' +
+
+    fieldRow('CostCenter ' + badge('params'),
+      '<input type="text" value="' + tagCostCenter + '" placeholder="e.g. IT-1234"' +
+        ' oninput="setVal(\'tagCostCenter\', this.value)" class="' + inputCls + '">',
+      null,
+      'Cost center code for billing and chargeback.') +
+
+    fieldRow('Owner ' + badge('params'),
+      '<input type="text" value="' + tagOwner + '" placeholder="e.g. platform-team"' +
+        ' oninput="setVal(\'tagOwner\', this.value)" class="' + inputCls + '">',
+      null,
+      'Team or individual responsible for this cluster.') +
+
+    fieldRow('Project ' + badge('params'),
+      '<input type="text" value="' + tagProject + '" placeholder="e.g. aks-platform"' +
+        ' oninput="setVal(\'tagProject\', this.value)" class="' + inputCls + '">',
+      null,
+      'Project name associated with this deployment.') +
+
+    '<details class="mt-6 border border-gray-200 rounded-lg">' +
+      '<summary class="px-4 py-3 cursor-pointer text-sm font-semibold text-gray-700 hover:bg-gray-50 rounded-lg select-none">Advanced: Custom Tags &amp; Role Assignments</summary>' +
+      '<div class="px-4 pb-4 pt-2 border-t border-gray-200">' +
+
+        '<h3 class="text-sm font-semibold text-gray-700 mb-2 mt-3">Custom Tags ' + badge('params') + '</h3>' +
+        '<p class="text-xs text-gray-500 mb-3">Additional key-value tags applied to all deployed resources.</p>' +
+        customTagsField +
+
+        '<h3 class="text-sm font-semibold text-gray-700 mb-2 mt-6">Additional Role Assignments ' + badge('params') + '</h3>' +
+        '<p class="text-xs text-gray-500 mb-3">Assign Azure RBAC roles to additional principals on the AKS resource group or cluster scope.</p>' +
+        roleAssignmentsField +
+
+      '</div>' +
+    '</details>' +
+
+    errorsHtml(validation.errors) +
+    warningsHtml(validation.warnings);
 }
 function renderStep3() {
   return '<h2 class="text-xl font-bold text-gray-800 mb-4">Step 3: Networking</h2><p class="text-gray-500">Coming in next build...</p>';
