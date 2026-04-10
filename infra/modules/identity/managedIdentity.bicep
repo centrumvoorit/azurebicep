@@ -13,7 +13,7 @@ param environment string
 
 var identityName = 'id-aks-${customerName}-${environment}'
 
-resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
   name: identityName
   location: location
   tags: tags

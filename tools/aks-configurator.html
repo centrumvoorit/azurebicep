@@ -1,0 +1,3853 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AKS Configurator</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  .fade-out { animation: fadeOut 0.5s ease-out forwards; }
+  @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
+</style>
+</head>
+<body class="bg-gray-50 min-h-screen flex flex-col">
+
+<!-- Header -->
+<header class="bg-gradient-to-r from-blue-700 to-blue-900 text-white shadow-lg">
+  <div class="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-bold">AKS Configurator</h1>
+      <p class="text-blue-200 text-sm">Azure Kubernetes Service deployment wizard</p>
+    </div>
+    <span class="bg-blue-600 text-blue-100 text-xs px-3 py-1 rounded-full font-mono">v1.0 | Compatible with azurebicep modules v1.x</span>
+  </div>
+</header>
+
+<!-- Environment change banner -->
+<div id="envBanner" class="hidden bg-amber-100 border-b border-amber-300 text-amber-800 text-center py-2 text-sm font-medium"></div>
+
+<!-- Main layout -->
+<div class="flex-1 flex max-w-7xl mx-auto w-full">
+  <!-- Sidebar -->
+  <nav id="stepNav" class="w-64 bg-white border-r border-gray-200 p-4 flex-shrink-0"></nav>
+  <!-- Content -->
+  <main id="mainContent" class="flex-1 p-6 overflow-y-auto"></main>
+</div>
+
+<!-- Bottom navigation -->
+<footer class="bg-white border-t border-gray-200 shadow-inner">
+  <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between relative">
+    <div class="flex gap-2">
+      <button id="btnPrev" onclick="prevStep()" class="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">Previous</button>
+      <button id="btnNext" onclick="nextStep()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Next</button>
+    </div>
+    <div class="flex gap-2">
+      <button onclick="saveConfig()" class="px-3 py-2 border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50 text-sm">Save</button>
+      <button onclick="loadConfig()" class="px-3 py-2 border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50 text-sm">Load</button>
+      <button onclick="resetState()" class="px-3 py-2 border border-red-300 rounded-lg text-red-600 hover:bg-red-50 text-sm">Reset</button>
+    </div>
+    <!-- Save status indicator -->
+    <div id="saveStatus" class="text-xs text-gray-400 absolute right-4 bottom-1">Auto-saved</div>
+  </div>
+</footer>
+
+<script>
+// ============================================================
+// CONSTANTS
+// ============================================================
+
+var SCHEMA_VERSION = 1;
+
+const STEPS = [
+  { num: 1, title: 'Cluster Basics' },
+  { num: 2, title: 'Access & Governance' },
+  { num: 3, title: 'Networking' },
+  { num: 4, title: 'Compute' },
+  { num: 5, title: 'Platform Services' },
+  { num: 6, title: 'Ecosystem Tools' },
+  { num: 7, title: 'Review & Generate' }
+];
+
+const VM_SIZES = [
+  { name: 'Standard_D2s_v5', vCPU: 2, ram: 8 },
+  { name: 'Standard_D4s_v5', vCPU: 4, ram: 16 },
+  { name: 'Standard_D8s_v5', vCPU: 8, ram: 32 },
+  { name: 'Standard_D16s_v5', vCPU: 16, ram: 64 },
+  { name: 'Standard_E2s_v5', vCPU: 2, ram: 16 },
+  { name: 'Standard_E4s_v5', vCPU: 4, ram: 32 },
+  { name: 'Standard_E8s_v5', vCPU: 8, ram: 64 },
+  { name: 'Standard_E16s_v5', vCPU: 16, ram: 128 }
+];
+
+const REGIONS = [
+  'westeurope', 'northeurope', 'eastus', 'eastus2', 'westus2', 'centralus',
+  'uksouth', 'ukwest', 'germanywestcentral', 'swedencentral', 'norwayeast', 'francecentral'
+];
+
+const K8S_VERSIONS = ['1.29', '1.30', '1.31'];
+
+const UPGRADE_CHANNELS = ['none', 'patch', 'stable', 'rapid', 'node-image'];
+
+// ============================================================
+// ENV_DEFAULTS
+// ============================================================
+
+const ENV_DEFAULTS = {
+  dev: {
+    environment: 'dev',
+    location: 'westeurope',
+    enablePrivateCluster: false,
+    kubernetesVersion: '1.30',
+    vnetAddressPrefix: '10.1.0.0/16',
+    aksSubnetPrefix: '10.1.0.0/20',
+    servicesSubnetPrefix: '10.1.16.0/24',
+    privateEndpointSubnetPrefix: '10.1.17.0/24',
+    serviceCidr: '10.200.0.0/16',
+    dnsServiceIP: '10.200.0.10',
+    systemNodeVmSize: 'Standard_D2s_v5',
+    systemAutoscaling: false,
+    systemNodeCount: 1,
+    systemNodeMinCount: 1,
+    systemNodeMaxCount: 3,
+    userNodeVmSize: 'Standard_D4s_v5',
+    userAutoscaling: false,
+    userNodeCount: 1,
+    userNodeMinCount: 1,
+    userNodeMaxCount: 5,
+    osDiskSizeGB: 128,
+    availabilityZones: [],
+    upgradeChannel: 'patch',
+    maxPodsPerNode: 30,
+    deployAcr: true,
+    acrSku: 'Standard',
+    deployKeyVault: true,
+    keyVaultSku: 'standard',
+    deployMonitoring: true,
+    logRetentionDays: 30,
+    tagCostCenter: 'IT',
+    tagOwner: 'platform-team',
+    tagProject: 'aks-platform'
+  },
+  acc: {
+    environment: 'acc',
+    location: 'westeurope',
+    enablePrivateCluster: true,
+    kubernetesVersion: '1.30',
+    vnetAddressPrefix: '10.2.0.0/16',
+    aksSubnetPrefix: '10.2.0.0/20',
+    servicesSubnetPrefix: '10.2.16.0/24',
+    privateEndpointSubnetPrefix: '10.2.17.0/24',
+    serviceCidr: '10.200.0.0/16',
+    dnsServiceIP: '10.200.0.10',
+    systemNodeVmSize: 'Standard_D2s_v5',
+    systemAutoscaling: false,
+    systemNodeCount: 2,
+    systemNodeMinCount: 2,
+    systemNodeMaxCount: 5,
+    userNodeVmSize: 'Standard_D4s_v5',
+    userAutoscaling: false,
+    userNodeCount: 2,
+    userNodeMinCount: 2,
+    userNodeMaxCount: 8,
+    osDiskSizeGB: 128,
+    availabilityZones: ['1', '2', '3'],
+    upgradeChannel: 'stable',
+    maxPodsPerNode: 30,
+    deployAcr: true,
+    acrSku: 'Premium',
+    deployKeyVault: true,
+    keyVaultSku: 'standard',
+    deployMonitoring: true,
+    logRetentionDays: 90,
+    tagCostCenter: 'IT',
+    tagOwner: 'platform-team',
+    tagProject: 'aks-platform'
+  },
+  prod: {
+    environment: 'prod',
+    location: 'westeurope',
+    enablePrivateCluster: true,
+    kubernetesVersion: '1.30',
+    vnetAddressPrefix: '10.3.0.0/16',
+    aksSubnetPrefix: '10.3.0.0/20',
+    servicesSubnetPrefix: '10.3.16.0/24',
+    privateEndpointSubnetPrefix: '10.3.17.0/24',
+    serviceCidr: '10.200.0.0/16',
+    dnsServiceIP: '10.200.0.10',
+    systemNodeVmSize: 'Standard_D4s_v5',
+    systemAutoscaling: true,
+    systemNodeCount: 3,
+    systemNodeMinCount: 3,
+    systemNodeMaxCount: 6,
+    userNodeVmSize: 'Standard_D8s_v5',
+    userAutoscaling: true,
+    userNodeCount: 3,
+    userNodeMinCount: 3,
+    userNodeMaxCount: 12,
+    osDiskSizeGB: 256,
+    availabilityZones: ['1', '2', '3'],
+    upgradeChannel: 'stable',
+    maxPodsPerNode: 50,
+    deployAcr: true,
+    acrSku: 'Premium',
+    deployKeyVault: true,
+    keyVaultSku: 'standard',
+    deployMonitoring: true,
+    logRetentionDays: 365,
+    tagCostCenter: 'IT',
+    tagOwner: 'platform-team',
+    tagProject: 'aks-platform'
+  }
+};
+
+// ============================================================
+// ECOSYSTEM_TOOLS
+// ============================================================
+
+const ECOSYSTEM_TOOLS = {
+  monitoring: {
+    label: 'Monitoring',
+    tools: [
+      {
+        id: 'kube-prometheus-stack',
+        label: 'kube-prometheus-stack',
+        description: 'Full Prometheus + Grafana monitoring stack with pre-built dashboards for Kubernetes.',
+        deployType: 'Helm install',
+        requirements: function(state) {
+          var vcpu = getVmVcpu(state.userNodeVmSize ? state.userNodeVmSize.value : 'Standard_D4s_v5');
+          return vcpu < 2 ? ['Requires at least 2 vCPU on user nodes'] : [];
+        },
+        guidance: {
+          helmRepo: 'https://prometheus-community.github.io/helm-charts',
+          chart: 'kube-prometheus-stack',
+          namespace: 'monitoring',
+          commands: [
+            'helm repo add prometheus-community https://prometheus-community.github.io/helm-charts',
+            'helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack -n monitoring --create-namespace'
+          ],
+          verifyCmd: 'kubectl get pods -n monitoring',
+          note: 'Configure persistent storage for production workloads.'
+        }
+      },
+      {
+        id: 'azure-monitor',
+        label: 'Azure Monitor (Container Insights)',
+        description: 'Native Azure monitoring integration with Log Analytics workspace.',
+        deployType: 'AKS add-on',
+        requirements: function(state) {
+          if (!state.deployMonitoring || !state.deployMonitoring.value) return ['Requires monitoring feature flag enabled (Step 5)'];
+          return [];
+        },
+        guidance: {
+          commands: ['Enabled via deployMonitoring flag in Bicep parameters.'],
+          verifyCmd: 'az aks show -g <rg> -n <aks> --query addonProfiles.omsagent',
+          note: 'Log retention configured via logRetentionDays parameter.'
+        }
+      }
+    ]
+  },
+  serviceMesh: {
+    label: 'Service Mesh',
+    tools: [
+      {
+        id: 'istio',
+        label: 'Istio (AKS managed)',
+        description: 'Azure-managed Istio service mesh with mTLS, traffic management, and observability.',
+        deployType: 'AKS add-on',
+        requirements: function(state) {
+          var vcpu = getVmVcpu(state.userNodeVmSize ? state.userNodeVmSize.value : 'Standard_D4s_v5');
+          return vcpu < 4 ? ['Requires at least 4 vCPU on user nodes'] : [];
+        },
+        conflicts: ['linkerd'],
+        guidance: {
+          commands: ['az aks mesh enable -g <rg> -n <aks>'],
+          verifyCmd: 'az aks show -g <rg> -n <aks> --query serviceMeshProfile',
+          note: 'Cannot be combined with Linkerd.'
+        }
+      },
+      {
+        id: 'linkerd',
+        label: 'Linkerd',
+        description: 'Lightweight, ultrafast service mesh focused on simplicity and performance.',
+        deployType: 'Helm install',
+        requirements: function(state) {
+          var vcpu = getVmVcpu(state.userNodeVmSize ? state.userNodeVmSize.value : 'Standard_D4s_v5');
+          return vcpu < 2 ? ['Requires at least 2 vCPU on user nodes'] : [];
+        },
+        conflicts: ['istio'],
+        guidance: {
+          helmRepo: 'https://helm.linkerd.io/stable',
+          chart: 'linkerd-control-plane',
+          namespace: 'linkerd',
+          commands: [
+            'curl -sL https://run.linkerd.io/install | sh',
+            'linkerd install | kubectl apply -f -'
+          ],
+          verifyCmd: 'linkerd check',
+          note: 'Cannot be combined with Istio.'
+        }
+      }
+    ]
+  },
+  ingress: {
+    label: 'Ingress',
+    tools: [
+      {
+        id: 'nginx',
+        label: 'NGINX Ingress Controller',
+        description: 'Community-maintained NGINX-based ingress controller, widely adopted.',
+        deployType: 'Helm install',
+        requirements: function() { return []; },
+        guidance: {
+          helmRepo: 'https://kubernetes.github.io/ingress-nginx',
+          chart: 'ingress-nginx',
+          namespace: 'ingress-nginx',
+          commands: [
+            'helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx',
+            'helm install ingress-nginx ingress-nginx/ingress-nginx -n ingress-nginx --create-namespace'
+          ],
+          verifyCmd: 'kubectl get svc -n ingress-nginx',
+          note: 'Creates an Azure Load Balancer automatically.'
+        }
+      },
+      {
+        id: 'agic',
+        label: 'Azure App Gateway (AGIC)',
+        description: 'Azure Application Gateway Ingress Controller with WAF and SSL termination.',
+        deployType: 'AKS add-on',
+        requirements: function() { return []; },
+        guidance: {
+          commands: ['az aks enable-addons -g <rg> -n <aks> --addons ingress-appgw --appgw-subnet-cidr 10.x.18.0/24'],
+          verifyCmd: 'kubectl get pods -n kube-system -l app=ingress-appgw',
+          note: 'Requires a dedicated subnet for Application Gateway.'
+        }
+      },
+      {
+        id: 'traefik',
+        label: 'Traefik',
+        description: 'Cloud-native ingress controller with automatic service discovery and Let\'s Encrypt.',
+        deployType: 'Helm install',
+        requirements: function() { return []; },
+        guidance: {
+          helmRepo: 'https://traefik.github.io/charts',
+          chart: 'traefik',
+          namespace: 'traefik',
+          commands: [
+            'helm repo add traefik https://traefik.github.io/charts',
+            'helm install traefik traefik/traefik -n traefik --create-namespace'
+          ],
+          verifyCmd: 'kubectl get svc -n traefik',
+          note: 'Good alternative to NGINX with built-in dashboard.'
+        }
+      }
+    ]
+  },
+  certsDns: {
+    label: 'Certificates & DNS',
+    tools: [
+      {
+        id: 'cert-manager',
+        label: 'cert-manager',
+        description: 'Automatic TLS certificate management with Let\'s Encrypt and other issuers.',
+        deployType: 'Helm install',
+        requirements: function(state) {
+          var tools = (state.ecosystemTools && state.ecosystemTools.value) ? state.ecosystemTools.value : {};
+          var hasIngress = tools['nginx'] || tools['agic'] || tools['traefik'];
+          return hasIngress ? [] : ['Recommended to have an ingress controller selected'];
+        },
+        guidance: {
+          helmRepo: 'https://charts.jetstack.io',
+          chart: 'cert-manager',
+          namespace: 'cert-manager',
+          commands: [
+            'helm repo add jetstack https://charts.jetstack.io',
+            'helm install cert-manager jetstack/cert-manager -n cert-manager --create-namespace --set installCRDs=true'
+          ],
+          verifyCmd: 'kubectl get pods -n cert-manager',
+          note: 'Install CRDs with --set installCRDs=true.'
+        }
+      },
+      {
+        id: 'external-dns',
+        label: 'external-dns',
+        description: 'Automatically manages DNS records in Azure DNS based on Kubernetes resources.',
+        deployType: 'Helm install',
+        requirements: function() { return []; },
+        guidance: {
+          helmRepo: 'https://kubernetes-sigs.github.io/external-dns',
+          chart: 'external-dns',
+          namespace: 'external-dns',
+          commands: [
+            'helm repo add external-dns https://kubernetes-sigs.github.io/external-dns',
+            'helm install external-dns external-dns/external-dns -n external-dns --create-namespace'
+          ],
+          verifyCmd: 'kubectl get pods -n external-dns',
+          note: 'Requires Azure DNS zone and managed identity with DNS Zone Contributor role.'
+        }
+      }
+    ]
+  },
+  gitopsSecurity: {
+    label: 'GitOps & Security',
+    tools: [
+      {
+        id: 'flux',
+        label: 'Flux',
+        description: 'Azure-managed GitOps operator for continuous deployment from Git repositories.',
+        deployType: 'AKS add-on',
+        requirements: function() { return []; },
+        conflicts: ['argocd'],
+        guidance: {
+          commands: ['az k8s-configuration flux create -g <rg> -c <aks> -n gitops --namespace flux-system -t managedClusters --scope cluster -u <git-repo>'],
+          verifyCmd: 'az k8s-configuration flux list -g <rg> -c <aks> -t managedClusters',
+          note: 'Cannot be combined with ArgoCD. Azure-managed, no Helm needed.'
+        }
+      },
+      {
+        id: 'argocd',
+        label: 'ArgoCD',
+        description: 'Declarative GitOps continuous delivery tool with web UI and SSO support.',
+        deployType: 'Helm install',
+        requirements: function(state) {
+          var vcpu = getVmVcpu(state.userNodeVmSize ? state.userNodeVmSize.value : 'Standard_D4s_v5');
+          return vcpu < 2 ? ['Requires at least 2 vCPU on user nodes'] : [];
+        },
+        conflicts: ['flux'],
+        guidance: {
+          helmRepo: 'https://argoproj.github.io/argo-helm',
+          chart: 'argo-cd',
+          namespace: 'argocd',
+          commands: [
+            'helm repo add argo https://argoproj.github.io/argo-helm',
+            'helm install argocd argo/argo-cd -n argocd --create-namespace'
+          ],
+          verifyCmd: 'kubectl get pods -n argocd',
+          note: 'Cannot be combined with Flux.'
+        }
+      },
+      {
+        id: 'gatekeeper',
+        label: 'OPA/Gatekeeper',
+        description: 'Open Policy Agent for Kubernetes admission control and policy enforcement.',
+        deployType: 'Helm install',
+        requirements: function() { return []; },
+        conflicts: ['azure-policy'],
+        guidance: {
+          helmRepo: 'https://open-policy-agent.github.io/gatekeeper/charts',
+          chart: 'gatekeeper',
+          namespace: 'gatekeeper-system',
+          commands: [
+            'helm repo add gatekeeper https://open-policy-agent.github.io/gatekeeper/charts',
+            'helm install gatekeeper gatekeeper/gatekeeper -n gatekeeper-system --create-namespace'
+          ],
+          verifyCmd: 'kubectl get pods -n gatekeeper-system',
+          note: 'Cannot be combined with Azure Policy add-on.'
+        }
+      },
+      {
+        id: 'azure-policy',
+        label: 'Azure Policy',
+        description: 'Azure-native policy engine for Kubernetes with built-in compliance reporting.',
+        deployType: 'AKS add-on',
+        requirements: function() { return []; },
+        conflicts: ['gatekeeper'],
+        guidance: {
+          commands: ['az aks enable-addons -g <rg> -n <aks> --addons azure-policy'],
+          verifyCmd: 'kubectl get pods -n kube-system -l app=azure-policy',
+          note: 'Cannot be combined with OPA/Gatekeeper.'
+        }
+      },
+      {
+        id: 'falco',
+        label: 'Falco',
+        description: 'Runtime security and threat detection for containers using system call monitoring.',
+        deployType: 'Advanced',
+        requirements: function() { return []; },
+        guidance: {
+          helmRepo: 'https://falcosecurity.github.io/charts',
+          chart: 'falco',
+          namespace: 'falco',
+          commands: [
+            'helm repo add falcosecurity https://falcosecurity.github.io/charts',
+            'helm install falco falcosecurity/falco -n falco --create-namespace'
+          ],
+          verifyCmd: 'kubectl get pods -n falco',
+          note: 'Runs as DaemonSet; uses ~0.5 vCPU per node. Requires kernel headers.'
+        }
+      },
+      {
+        id: 'keda',
+        label: 'KEDA',
+        description: 'Kubernetes Event-Driven Autoscaling for scaling based on external metrics.',
+        deployType: 'AKS add-on',
+        requirements: function() { return []; },
+        guidance: {
+          commands: ['az aks update -g <rg> -n <aks> --enable-keda'],
+          verifyCmd: 'kubectl get pods -n kube-system -l app=keda-operator',
+          note: 'Supports Azure Service Bus, Storage Queue, Prometheus, and many more scalers.'
+        }
+      },
+      {
+        id: 'csi-secret-store',
+        label: 'CSI Secret Store + Key Vault',
+        description: 'Mount Azure Key Vault secrets directly into pods as volumes or env variables.',
+        deployType: 'AKS add-on',
+        requirements: function(state) {
+          if (!state.deployKeyVault || !state.deployKeyVault.value) return ['Requires Key Vault to be enabled (Step 5)'];
+          return [];
+        },
+        guidance: {
+          commands: ['az aks enable-addons -g <rg> -n <aks> --addons azure-keyvault-secrets-provider'],
+          verifyCmd: 'kubectl get pods -n kube-system -l app=secrets-store-csi-driver',
+          note: 'Requires Key Vault deployment and managed identity with access policy.'
+        }
+      }
+    ]
+  }
+};
+
+// ============================================================
+// BICEP TEMPLATES
+// ============================================================
+
+var BICEP_TEMPLATES = {
+  'types.bicep': `// ============================================================================
+// User-Defined Types for compile-time validation
+// Fouten worden in de IDE gevangen, niet na een 20-minuten pipeline run.
+// ============================================================================
+
+@export()
+@description('Deployment environment')
+type environmentType = 'dev' | 'acc' | 'prod'
+
+@export()
+@description('Standard resource tags \u2014 extra tags zijn toegestaan')
+type tagsType = {
+  CostCenter: string
+  Owner: string
+  Project: string
+  *: string
+}
+
+@export()
+@description('Network configuration for VNet and subnets')
+type networkConfigType = {
+  @description('Address prefix for the virtual network (e.g., 10.1.0.0/16)')
+  vnetAddressPrefix: string
+
+  @description('Address prefix for the AKS subnet (e.g., 10.1.0.0/20)')
+  aksSubnetPrefix: string
+
+  @description('Address prefix for the services subnet (e.g., 10.1.16.0/24)')
+  servicesSubnetPrefix: string
+
+  @description('Address prefix for the private endpoints subnet (e.g., 10.1.17.0/24)')
+  privateEndpointSubnetPrefix: string
+}
+
+@export()
+@description('AKS cluster configuration')
+type aksConfigType = {
+  @description('Kubernetes version (e.g., 1.30)')
+  kubernetesVersion: string
+
+  @description('System node pool VM count')
+  systemNodeCount: int
+
+  @description('System node pool VM size (e.g., Standard_D2s_v5)')
+  systemNodeVmSize: string
+
+  @description('User node pool VM count')
+  userNodeCount: int
+
+  @description('User node pool VM size (e.g., Standard_D4s_v5)')
+  userNodeVmSize: string
+
+  @description('Enable private AKS cluster (recommended for acc/prod)')
+  enablePrivateCluster: bool
+}
+
+@export()
+@description('Feature flags to enable or disable building blocks')
+type featureFlagsType = {
+  @description('Deploy Azure Container Registry')
+  deployAcr: bool
+
+  @description('Deploy Azure Key Vault')
+  deployKeyVault: bool
+
+  @description('Deploy Log Analytics and monitoring')
+  deployMonitoring: bool
+}
+
+@export()
+@description('ACR SKU tier')
+type acrSkuType = 'Basic' | 'Standard' | 'Premium'
+
+@export()
+@description('Key Vault SKU tier')
+type keyVaultSkuType = 'standard' | 'premium'
+
+@export()
+@description('Additional role assignment configuration')
+type roleAssignmentType = {
+  @description('Principal ID to assign the role to')
+  principalId: string
+
+  @description('Role definition ID (GUID)')
+  roleDefinitionId: string
+
+  @description('Principal type')
+  principalType: 'ServicePrincipal' | 'Group' | 'User'?
+}
+`,
+
+  'main.bicep': `targetScope = 'subscription'
+
+import {
+  environmentType
+  tagsType
+  networkConfigType
+  aksConfigType
+  featureFlagsType
+  acrSkuType
+  keyVaultSkuType
+  roleAssignmentType
+} from 'types.bicep'
+
+// ============================================================================
+// Parameters
+// ============================================================================
+
+@description('Customer name (short, lowercase, no special characters)')
+param customerName string
+
+@description('Environment name')
+param environment environmentType
+
+@description('Azure region for all resources')
+param location string
+
+@description('Tags to apply to all resources')
+param tags tagsType
+
+// Feature Flags
+@description('Feature flags to enable or disable building blocks')
+param features featureFlagsType
+
+// Network
+@description('Network configuration for VNet and subnets')
+param networkConfig networkConfigType
+
+// AKS
+@description('AKS cluster configuration')
+param aksConfig aksConfigType
+
+@description('Azure AD admin group object IDs for AKS cluster admin access')
+param adminGroupObjectIds array
+
+// ACR
+@description('ACR SKU')
+param acrSku acrSkuType
+
+// Key Vault
+@description('Key Vault SKU')
+param keyVaultSku keyVaultSkuType
+
+// Monitoring
+@description('Log Analytics retention in days')
+@minValue(30)
+@maxValue(730)
+param logRetentionDays int
+
+// Extensibility
+@description('Additional role assignments beyond the defaults')
+param additionalRoleAssignments roleAssignmentType[] = []
+
+// ============================================================================
+// Variables
+// ============================================================================
+
+var resourceGroupName = 'rg-\${customerName}-\${environment}-\${location}'
+var envTags = union(tags, {
+  Environment: environment
+  ManagedBy: 'Bicep'
+})
+
+// Well-known Azure role definition GUIDs
+var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+var networkContributorRoleId = '4d97b98b-1d4f-4787-a291-c67834d212e7'
+var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
+
+// ============================================================================
+// Resource Group
+// ============================================================================
+
+resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
+  name: resourceGroupName
+  location: location
+  tags: envTags
+}
+
+// ============================================================================
+// Modules
+// ============================================================================
+
+module network 'modules/network/vnet.bicep' = {
+  name: 'network-deployment'
+  scope: rg
+  params: {
+    location: location
+    tags: envTags
+    customerName: customerName
+    environment: environment
+    vnetAddressPrefix: networkConfig.vnetAddressPrefix
+    aksSubnetPrefix: networkConfig.aksSubnetPrefix
+    servicesSubnetPrefix: networkConfig.servicesSubnetPrefix
+    privateEndpointSubnetPrefix: networkConfig.privateEndpointSubnetPrefix
+  }
+}
+
+module identity 'modules/identity/managedIdentity.bicep' = {
+  name: 'identity-deployment'
+  scope: rg
+  params: {
+    location: location
+    tags: envTags
+    customerName: customerName
+    environment: environment
+  }
+}
+
+module monitoring 'modules/monitoring/logAnalytics.bicep' = if (features.deployMonitoring) {
+  name: 'monitoring-deployment'
+  scope: rg
+  params: {
+    location: location
+    tags: envTags
+    customerName: customerName
+    environment: environment
+    retentionDays: logRetentionDays
+  }
+}
+
+module acr 'modules/acr/containerRegistry.bicep' = if (features.deployAcr) {
+  name: 'acr-deployment'
+  scope: rg
+  params: {
+    location: location
+    tags: envTags
+    customerName: customerName
+    environment: environment
+    acrSku: acrSku
+    privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
+    vnetId: network.outputs.vnetId
+    logAnalyticsWorkspaceId: features.deployMonitoring ? monitoring.outputs.workspaceId : ''
+  }
+}
+
+module keyVault 'modules/keyvault/keyVault.bicep' = if (features.deployKeyVault) {
+  name: 'keyvault-deployment'
+  scope: rg
+  params: {
+    location: location
+    tags: envTags
+    customerName: customerName
+    environment: environment
+    skuName: keyVaultSku
+    privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
+    vnetId: network.outputs.vnetId
+    logAnalyticsWorkspaceId: features.deployMonitoring ? monitoring.outputs.workspaceId : ''
+    tenantId: tenant().tenantId
+  }
+}
+
+module aks 'modules/aks/aksCluster.bicep' = {
+  name: 'aks-deployment'
+  scope: rg
+  params: {
+    location: location
+    tags: envTags
+    customerName: customerName
+    environment: environment
+    kubernetesVersion: aksConfig.kubernetesVersion
+    aksSubnetId: network.outputs.aksSubnetId
+    logAnalyticsWorkspaceId: features.deployMonitoring ? monitoring.outputs.workspaceId : ''
+    userAssignedIdentityId: identity.outputs.identityId
+    enablePrivateCluster: aksConfig.enablePrivateCluster
+    systemNodeCount: aksConfig.systemNodeCount
+    systemNodeVmSize: aksConfig.systemNodeVmSize
+    userNodeCount: aksConfig.userNodeCount
+    userNodeVmSize: aksConfig.userNodeVmSize
+    adminGroupObjectIds: adminGroupObjectIds
+  }
+}
+
+// ============================================================================
+// Role Assignments
+// ============================================================================
+
+// AKS kubelet identity -> ACR Pull (only when ACR is deployed)
+module roleAcrPull 'modules/roleAssignment/roleAssignment.bicep' = if (features.deployAcr) {
+  name: 'role-acr-pull'
+  scope: rg
+  params: {
+    principalId: aks.outputs.kubeletIdentityObjectId
+    roleDefinitionId: acrPullRoleId
+  }
+}
+
+// AKS managed identity -> Network Contributor on VNet
+module roleNetworkContributor 'modules/roleAssignment/roleAssignment.bicep' = {
+  name: 'role-network-contributor'
+  scope: rg
+  params: {
+    principalId: identity.outputs.identityPrincipalId
+    roleDefinitionId: networkContributorRoleId
+  }
+}
+
+// AKS kubelet identity -> Key Vault Secrets User (only when Key Vault is deployed)
+module roleKeyVaultSecretsUser 'modules/roleAssignment/roleAssignment.bicep' = if (features.deployKeyVault) {
+  name: 'role-keyvault-secrets-user'
+  scope: rg
+  params: {
+    principalId: aks.outputs.kubeletIdentityObjectId
+    roleDefinitionId: keyVaultSecretsUserRoleId
+  }
+}
+
+// Additional role assignments (extensibility)
+module extraRoles 'modules/roleAssignment/roleAssignment.bicep' = [
+  for (role, i) in additionalRoleAssignments: {
+    name: 'role-extra-\${i}'
+    scope: rg
+    params: {
+      principalId: role.principalId
+      roleDefinitionId: role.roleDefinitionId
+      principalType: role.?principalType ?? 'ServicePrincipal'
+    }
+  }
+]
+
+// ============================================================================
+// Outputs
+// ============================================================================
+
+output resourceGroupName string = rg.name
+output aksClusterName string = aks.outputs.aksClusterName
+output aksOidcIssuerUrl string = aks.outputs.aksOidcIssuerUrl
+output vnetId string = network.outputs.vnetId
+output acrLoginServer string = features.deployAcr ? acr.outputs.acrLoginServer : ''
+output keyVaultUri string = features.deployKeyVault ? keyVault.outputs.keyVaultUri : ''
+output logAnalyticsWorkspaceId string = features.deployMonitoring ? monitoring.outputs.workspaceId : ''
+`,
+
+  'modules/aks/aksCluster.bicep': `@description('Azure region for all resources')
+param location string
+
+@description('Tags to apply to all resources')
+param tags object
+
+@description('Customer name used in resource naming')
+param customerName string
+
+@description('Environment name (dev, acc, prod)')
+@allowed(['dev', 'acc', 'prod'])
+param environment string
+
+@description('Kubernetes version')
+param kubernetesVersion string
+
+@description('Resource ID of the AKS subnet')
+param aksSubnetId string
+
+@description('Resource ID of the Log Analytics workspace')
+param logAnalyticsWorkspaceId string
+
+@description('Resource ID of the user-assigned managed identity')
+param userAssignedIdentityId string
+
+@description('Enable private cluster')
+param enablePrivateCluster bool
+
+@description('System node pool VM count')
+@minValue(1)
+param systemNodeCount int
+
+@description('System node pool VM size')
+param systemNodeVmSize string
+
+@description('User node pool VM count')
+@minValue(1)
+param userNodeCount int
+
+@description('User node pool VM size')
+param userNodeVmSize string
+
+@description('Azure AD admin group object IDs for cluster admin access')
+param adminGroupObjectIds array
+
+@description('DNS service IP address (must be within serviceCidr)')
+param dnsServiceIP string = '10.0.0.10'
+
+@description('Service CIDR for Kubernetes services')
+param serviceCidr string = '10.0.0.0/16'
+
+var aksName = 'aks-\${customerName}-\${environment}'
+
+resource aksCluster 'Microsoft.ContainerService/managedClusters@2024-09-01' = {
+  name: aksName
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '\${userAssignedIdentityId}': {}
+    }
+  }
+  properties: {
+    kubernetesVersion: kubernetesVersion
+    dnsPrefix: 'aks-\${customerName}-\${environment}'
+    disableLocalAccounts: true
+    aadProfile: {
+      managed: true
+      enableAzureRBAC: true
+      adminGroupObjectIDs: adminGroupObjectIds
+    }
+    apiServerAccessProfile: {
+      enablePrivateCluster: enablePrivateCluster
+    }
+    networkProfile: {
+      networkPlugin: 'azure'
+      networkPolicy: 'azure'
+      serviceCidr: serviceCidr
+      dnsServiceIP: dnsServiceIP
+      outboundType: 'loadBalancer'
+    }
+    agentPoolProfiles: [
+      {
+        name: 'system'
+        mode: 'System'
+        count: systemNodeCount
+        vmSize: systemNodeVmSize
+        osType: 'Linux'
+        osDiskSizeGB: 128
+        vnetSubnetID: aksSubnetId
+        enableAutoScaling: true
+        minCount: systemNodeCount
+        maxCount: systemNodeCount + 2
+        nodeTaints: [
+          'CriticalAddonsOnly=true:NoSchedule'
+        ]
+      }
+      {
+        name: 'user'
+        mode: 'User'
+        count: userNodeCount
+        vmSize: userNodeVmSize
+        osType: 'Linux'
+        osDiskSizeGB: 128
+        vnetSubnetID: aksSubnetId
+        enableAutoScaling: true
+        minCount: userNodeCount
+        maxCount: userNodeCount * 3
+      }
+    ]
+    addonProfiles: !empty(logAnalyticsWorkspaceId) ? {
+      omsagent: {
+        enabled: true
+        config: {
+          logAnalyticsWorkspaceResourceID: logAnalyticsWorkspaceId
+        }
+      }
+    } : {}
+    oidcIssuerProfile: {
+      enabled: true
+    }
+    securityProfile: {
+      workloadIdentity: {
+        enabled: true
+      }
+    }
+    autoScalerProfile: {
+      balanceSimilarNodeGroups: 'true'
+      expander: 'random'
+      maxGracefulTerminationSec: '600'
+      scaleDownDelayAfterAdd: '10m'
+      scaleDownUnneededTime: '10m'
+      scanInterval: '10s'
+    }
+  }
+}
+
+resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
+  name: '\${aksName}-diag'
+  scope: aksCluster
+  properties: {
+    workspaceId: logAnalyticsWorkspaceId
+    logs: [
+      {
+        categoryGroup: 'allLogs'
+        enabled: true
+      }
+    ]
+    metrics: [
+      {
+        category: 'AllMetrics'
+        enabled: true
+      }
+    ]
+  }
+}
+
+output aksClusterId string = aksCluster.id
+output aksClusterName string = aksCluster.name
+output aksOidcIssuerUrl string = aksCluster.properties.oidcIssuerProfile.issuerURL
+output kubeletIdentityObjectId string = aksCluster.properties.identityProfile.kubeletidentity.objectId
+`,
+
+  'modules/network/vnet.bicep': `@description('Azure region for all resources')
+param location string
+
+@description('Tags to apply to all resources')
+param tags object
+
+@description('Customer name used in resource naming')
+param customerName string
+
+@description('Environment name (dev, acc, prod)')
+@allowed(['dev', 'acc', 'prod'])
+param environment string
+
+@description('Address prefix for the virtual network')
+param vnetAddressPrefix string
+
+@description('Address prefix for the AKS subnet')
+param aksSubnetPrefix string
+
+@description('Address prefix for the services subnet')
+param servicesSubnetPrefix string
+
+@description('Address prefix for the private endpoints subnet')
+param privateEndpointSubnetPrefix string
+
+var vnetName = 'vnet-\${customerName}-\${environment}'
+var aksNsgName = 'nsg-aks-\${customerName}-\${environment}'
+var servicesNsgName = 'nsg-services-\${customerName}-\${environment}'
+var peNsgName = 'nsg-pe-\${customerName}-\${environment}'
+
+resource aksNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
+  name: aksNsgName
+  location: location
+  tags: tags
+  properties: {
+    securityRules: [
+      {
+        name: 'AllowVnetInbound'
+        properties: {
+          priority: 100
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: '*'
+          sourceAddressPrefix: 'VirtualNetwork'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'VirtualNetwork'
+          destinationPortRange: '*'
+        }
+      }
+      {
+        name: 'AllowAzureLoadBalancerInbound'
+        properties: {
+          priority: 110
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: '*'
+          sourceAddressPrefix: 'AzureLoadBalancer'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '*'
+        }
+      }
+      {
+        name: 'DenyAllInbound'
+        properties: {
+          priority: 4096
+          direction: 'Inbound'
+          access: 'Deny'
+          protocol: '*'
+          sourceAddressPrefix: 'Internet'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '*'
+        }
+      }
+    ]
+  }
+}
+
+resource servicesNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
+  name: servicesNsgName
+  location: location
+  tags: tags
+  properties: {
+    securityRules: [
+      {
+        name: 'AllowVnetInbound'
+        properties: {
+          priority: 100
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: '*'
+          sourceAddressPrefix: 'VirtualNetwork'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'VirtualNetwork'
+          destinationPortRange: '*'
+        }
+      }
+      {
+        name: 'DenyAllInbound'
+        properties: {
+          priority: 4096
+          direction: 'Inbound'
+          access: 'Deny'
+          protocol: '*'
+          sourceAddressPrefix: 'Internet'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '*'
+        }
+      }
+    ]
+  }
+}
+
+resource peNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
+  name: peNsgName
+  location: location
+  tags: tags
+  properties: {
+    securityRules: [
+      {
+        name: 'AllowVnetInbound'
+        properties: {
+          priority: 100
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: '*'
+          sourceAddressPrefix: 'VirtualNetwork'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'VirtualNetwork'
+          destinationPortRange: '*'
+        }
+      }
+      {
+        name: 'DenyAllInbound'
+        properties: {
+          priority: 4096
+          direction: 'Inbound'
+          access: 'Deny'
+          protocol: '*'
+          sourceAddressPrefix: 'Internet'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '*'
+        }
+      }
+    ]
+  }
+}
+
+resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
+  name: vnetName
+  location: location
+  tags: tags
+  properties: {
+    addressSpace: {
+      addressPrefixes: [
+        vnetAddressPrefix
+      ]
+    }
+    subnets: [
+      {
+        name: 'snet-aks'
+        properties: {
+          addressPrefix: aksSubnetPrefix
+          networkSecurityGroup: {
+            id: aksNsg.id
+          }
+        }
+      }
+      {
+        name: 'snet-services'
+        properties: {
+          addressPrefix: servicesSubnetPrefix
+          networkSecurityGroup: {
+            id: servicesNsg.id
+          }
+        }
+      }
+      {
+        name: 'snet-privateendpoints'
+        properties: {
+          addressPrefix: privateEndpointSubnetPrefix
+          networkSecurityGroup: {
+            id: peNsg.id
+          }
+          privateEndpointNetworkPolicies: 'Disabled'
+        }
+      }
+    ]
+  }
+}
+
+output vnetId string = vnet.id
+output vnetName string = vnet.name
+output aksSubnetId string = vnet.properties.subnets[0].id
+output servicesSubnetId string = vnet.properties.subnets[1].id
+output privateEndpointSubnetId string = vnet.properties.subnets[2].id
+`,
+
+  'modules/acr/containerRegistry.bicep': `@description('Azure region for all resources')
+param location string
+
+@description('Tags to apply to all resources')
+param tags object
+
+@description('Customer name used in resource naming')
+param customerName string
+
+@description('Environment name (dev, acc, prod)')
+@allowed(['dev', 'acc', 'prod'])
+param environment string
+
+@description('ACR SKU')
+@allowed(['Basic', 'Standard', 'Premium'])
+param acrSku string
+
+@description('Resource ID of the private endpoint subnet')
+param privateEndpointSubnetId string
+
+@description('Resource ID of the VNet for DNS zone linking')
+param vnetId string
+
+@description('Resource ID of the Log Analytics workspace')
+param logAnalyticsWorkspaceId string
+
+// ACR names cannot contain hyphens and must be globally unique
+var acrName = 'acr\${customerName}\${environment}'
+
+resource acr 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
+  name: acrName
+  location: location
+  tags: tags
+  sku: {
+    name: acrSku
+  }
+  properties: {
+    adminUserEnabled: false
+    publicNetworkAccess: acrSku == 'Premium' ? 'Disabled' : 'Enabled'
+    zoneRedundancy: acrSku == 'Premium' && environment == 'prod' ? 'Enabled' : 'Disabled'
+  }
+}
+
+resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
+  name: '\${acrName}-diag'
+  scope: acr
+  properties: {
+    workspaceId: logAnalyticsWorkspaceId
+    logs: [
+      {
+        categoryGroup: 'allLogs'
+        enabled: true
+      }
+    ]
+    metrics: [
+      {
+        category: 'AllMetrics'
+        enabled: true
+      }
+    ]
+  }
+}
+
+module privateEndpoint '../privateEndpoint/privateEndpoint.bicep' = if (acrSku == 'Premium') {
+  name: '\${acrName}-pe'
+  params: {
+    location: location
+    tags: tags
+    name: 'pe-\${acrName}'
+    subnetId: privateEndpointSubnetId
+    privateLinkServiceId: acr.id
+    groupIds: ['registry']
+    privateDnsZoneName: 'privatelink.azurecr.io'
+    vnetId: vnetId
+  }
+}
+
+output acrId string = acr.id
+output acrLoginServer string = acr.properties.loginServer
+output acrName string = acr.name
+`,
+
+  'modules/keyvault/keyVault.bicep': `@description('Azure region for all resources')
+param location string
+
+@description('Tags to apply to all resources')
+param tags object
+
+@description('Customer name used in resource naming')
+param customerName string
+
+@description('Environment name (dev, acc, prod)')
+@allowed(['dev', 'acc', 'prod'])
+param environment string
+
+@description('Key Vault SKU')
+@allowed(['standard', 'premium'])
+param skuName string
+
+@description('Resource ID of the private endpoint subnet')
+param privateEndpointSubnetId string
+
+@description('Resource ID of the VNet for DNS zone linking')
+param vnetId string
+
+@description('Resource ID of the Log Analytics workspace')
+param logAnalyticsWorkspaceId string
+
+@description('Azure AD tenant ID')
+param tenantId string
+
+var keyVaultName = 'kv-\${customerName}-\${environment}'
+
+resource keyVault 'Microsoft.KeyVault/vaults@2025-05-01' = {
+  name: keyVaultName
+  location: location
+  tags: tags
+  properties: {
+    sku: {
+      family: 'A'
+      name: skuName
+    }
+    tenantId: tenantId
+    enableRbacAuthorization: true
+    enableSoftDelete: true
+    softDeleteRetentionInDays: 90
+    enablePurgeProtection: true
+    publicNetworkAccess: 'Disabled'
+    networkAcls: {
+      defaultAction: 'Deny'
+      bypass: 'AzureServices'
+    }
+  }
+}
+
+resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
+  name: '\${keyVaultName}-diag'
+  scope: keyVault
+  properties: {
+    workspaceId: logAnalyticsWorkspaceId
+    logs: [
+      {
+        categoryGroup: 'allLogs'
+        enabled: true
+      }
+    ]
+    metrics: [
+      {
+        category: 'AllMetrics'
+        enabled: true
+      }
+    ]
+  }
+}
+
+module privateEndpoint '../privateEndpoint/privateEndpoint.bicep' = {
+  name: '\${keyVaultName}-pe'
+  params: {
+    location: location
+    tags: tags
+    name: 'pe-\${keyVaultName}'
+    subnetId: privateEndpointSubnetId
+    privateLinkServiceId: keyVault.id
+    groupIds: ['vault']
+    privateDnsZoneName: 'privatelink.vaultcore.azure.net'
+    vnetId: vnetId
+  }
+}
+
+output keyVaultId string = keyVault.id
+output keyVaultUri string = keyVault.properties.vaultUri
+output keyVaultName string = keyVault.name
+`,
+
+  'modules/monitoring/logAnalytics.bicep': `@description('Azure region for all resources')
+param location string
+
+@description('Tags to apply to all resources')
+param tags object
+
+@description('Customer name used in resource naming')
+param customerName string
+
+@description('Environment name (dev, acc, prod)')
+@allowed(['dev', 'acc', 'prod'])
+param environment string
+
+@description('Log retention in days')
+@minValue(30)
+@maxValue(730)
+param retentionDays int
+
+var workspaceName = 'log-\${customerName}-\${environment}'
+
+resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2025-07-01' = {
+  name: workspaceName
+  location: location
+  tags: tags
+  properties: {
+    sku: {
+      name: 'PerGB2018'
+    }
+    retentionInDays: retentionDays
+  }
+}
+
+output workspaceId string = logAnalytics.id
+output workspaceCustomerId string = logAnalytics.properties.customerId
+`,
+
+  'modules/identity/managedIdentity.bicep': `@description('Azure region for all resources')
+param location string
+
+@description('Tags to apply to all resources')
+param tags object
+
+@description('Customer name used in resource naming')
+param customerName string
+
+@description('Environment name (dev, acc, prod)')
+@allowed(['dev', 'acc', 'prod'])
+param environment string
+
+var identityName = 'id-aks-\${customerName}-\${environment}'
+
+resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
+  name: identityName
+  location: location
+  tags: tags
+}
+
+output identityId string = managedIdentity.id
+output identityPrincipalId string = managedIdentity.properties.principalId
+output identityClientId string = managedIdentity.properties.clientId
+`,
+
+  'modules/privateEndpoint/privateEndpoint.bicep': `@description('Azure region for all resources')
+param location string
+
+@description('Tags to apply to all resources')
+param tags object
+
+@description('Name for the private endpoint')
+param name string
+
+@description('Resource ID of the subnet for the private endpoint')
+param subnetId string
+
+@description('Resource ID of the service to connect to')
+param privateLinkServiceId string
+
+@description('Group IDs for the private link service (e.g., registry, vault)')
+param groupIds array
+
+@description('Name of the private DNS zone (e.g., privatelink.azurecr.io)')
+param privateDnsZoneName string
+
+@description('Resource ID of the VNet to link the DNS zone to')
+param vnetId string
+
+resource privateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
+  name: privateDnsZoneName
+  location: 'global'
+  tags: tags
+}
+
+resource vnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
+  parent: privateDnsZone
+  name: '\${name}-vnet-link'
+  location: 'global'
+  tags: tags
+  properties: {
+    registrationEnabled: false
+    virtualNetwork: {
+      id: vnetId
+    }
+  }
+}
+
+resource privateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = {
+  name: name
+  location: location
+  tags: tags
+  properties: {
+    subnet: {
+      id: subnetId
+    }
+    privateLinkServiceConnections: [
+      {
+        name: name
+        properties: {
+          privateLinkServiceId: privateLinkServiceId
+          groupIds: groupIds
+        }
+      }
+    ]
+  }
+}
+
+resource dnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = {
+  parent: privateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: privateDnsZoneName
+        properties: {
+          privateDnsZoneId: privateDnsZone.id
+        }
+      }
+    ]
+  }
+}
+
+output privateEndpointId string = privateEndpoint.id
+output privateDnsZoneId string = privateDnsZone.id
+`,
+
+  'modules/roleAssignment/roleAssignment.bicep': `@description('Principal ID to assign the role to')
+param principalId string
+
+@description('Role definition ID (GUID only, e.g., acdd72a7-3385-48ef-bd42-f606fba81ae7 for Reader)')
+param roleDefinitionId string
+
+@description('Principal type')
+@allowed(['ServicePrincipal', 'Group', 'User'])
+param principalType string = 'ServicePrincipal'
+
+var roleAssignmentName = guid(principalId, roleDefinitionId, resourceGroup().id)
+
+resource roleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: roleAssignmentName
+  properties: {
+    principalId: principalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleDefinitionId)
+    principalType: principalType
+  }
+}
+
+output roleAssignmentId string = roleAssignment.id
+`
+};
+
+// ============================================================
+// STATE
+// ============================================================
+
+var state = {};
+var currentStep = 1;
+
+function initState(env) {
+  var defaults = ENV_DEFAULTS[env] || ENV_DEFAULTS.dev;
+  state = {};
+  var fields = [
+    'customerName', 'environment', 'location', 'enablePrivateCluster', 'kubernetesVersion',
+    'adminGroupObjectIds', 'tagCostCenter', 'tagOwner', 'tagProject', 'customTags',
+    'additionalRoleAssignments', 'vnetAddressPrefix', 'aksSubnetPrefix', 'servicesSubnetPrefix',
+    'privateEndpointSubnetPrefix', 'serviceCidr', 'dnsServiceIP', 'apiServerAuthorizedIPs',
+    'systemNodeVmSize', 'systemAutoscaling', 'systemNodeCount', 'systemNodeMinCount',
+    'systemNodeMaxCount', 'userNodeVmSize', 'userAutoscaling', 'userNodeCount',
+    'userNodeMinCount', 'userNodeMaxCount', 'osDiskSizeGB', 'availabilityZones',
+    'upgradeChannel', 'maxPodsPerNode', 'deployAcr', 'acrSku', 'deployKeyVault',
+    'keyVaultSku', 'deployMonitoring', 'logRetentionDays', 'ecosystemTools'
+  ];
+
+  for (var i = 0; i < fields.length; i++) {
+    var f = fields[i];
+    var val = defaults[f];
+    if (val === undefined) {
+      if (f === 'customerName') val = '';
+      else if (f === 'adminGroupObjectIds') val = [];
+      else if (f === 'customTags') val = [];
+      else if (f === 'additionalRoleAssignments') val = [];
+      else if (f === 'apiServerAuthorizedIPs') val = [];
+      else if (f === 'ecosystemTools') val = {};
+      else val = '';
+    }
+    if (Array.isArray(val)) val = val.slice();
+    else if (typeof val === 'object' && val !== null) val = Object.assign({}, val);
+    state[f] = { value: val, _edited: false };
+  }
+}
+
+function getVal(key) {
+  return state[key] ? state[key].value : undefined;
+}
+
+var _renderTimer = null;
+function setVal(key, value) {
+  if (!state[key]) state[key] = { value: null, _edited: false };
+  if (Array.isArray(value)) value = value.slice();
+  else if (typeof value === 'object' && value !== null) value = Object.assign({}, value);
+  state[key].value = value;
+  state[key]._edited = true;
+  autoSave();
+  // Debounced focus-preserving render
+  if (_renderTimer) clearTimeout(_renderTimer);
+  _renderTimer = setTimeout(function() {
+    _renderTimer = null;
+    renderPreservingFocus();
+  }, 400);
+}
+
+function renderPreservingFocus() {
+  var focused = document.activeElement;
+  var tag = focused ? focused.tagName : '';
+  var isInput = (tag === 'INPUT' || tag === 'TEXTAREA');
+  // Find the focused input by matching its oninput attribute or position
+  var focusSelector = null;
+  var cursorPos = null;
+  if (isInput && focused.getAttribute('oninput')) {
+    focusSelector = focused.getAttribute('oninput');
+    cursorPos = focused.selectionStart;
+  }
+  render();
+  // Restore focus by finding input with matching oninput handler
+  if (focusSelector) {
+    var inputs = document.querySelectorAll('input, textarea');
+    for (var i = 0; i < inputs.length; i++) {
+      if (inputs[i].getAttribute('oninput') === focusSelector) {
+        inputs[i].focus();
+        if (cursorPos !== null) {
+          try { inputs[i].setSelectionRange(cursorPos, cursorPos); } catch(e) {}
+        }
+        break;
+      }
+    }
+  }
+}
+
+// Immediate render variant for toggles/selects that need instant UI feedback
+function setValNow(key, value) {
+  if (!state[key]) state[key] = { value: null, _edited: false };
+  if (Array.isArray(value)) value = value.slice();
+  else if (typeof value === 'object' && value !== null) value = Object.assign({}, value);
+  state[key].value = value;
+  state[key]._edited = true;
+  autoSave();
+  if (_renderTimer) clearTimeout(_renderTimer);
+  _renderTimer = null;
+  render();
+}
+
+function setValNoRender(key, value) {
+  if (!state[key]) state[key] = { value: null, _edited: false };
+  if (Array.isArray(value)) value = value.slice();
+  else if (typeof value === 'object' && value !== null) value = Object.assign({}, value);
+  state[key].value = value;
+  state[key]._edited = true;
+}
+
+function switchEnvironment(newEnv) {
+  var defaults = ENV_DEFAULTS[newEnv];
+  if (!defaults) return;
+
+  var updatedCount = 0;
+  var keys = Object.keys(defaults);
+  for (var i = 0; i < keys.length; i++) {
+    var key = keys[i];
+    if (state[key] && !state[key]._edited) {
+      var val = defaults[key];
+      if (Array.isArray(val)) val = val.slice();
+      else if (typeof val === 'object' && val !== null) val = Object.assign({}, val);
+      state[key].value = val;
+      updatedCount++;
+    }
+  }
+  state.environment.value = newEnv;
+  state.environment._edited = true;
+
+  var banner = document.getElementById('envBanner');
+  banner.textContent = 'Switched to ' + newEnv.toUpperCase() + ' environment. ' + updatedCount + ' fields updated to ' + newEnv + ' defaults (user-edited fields preserved).';
+  banner.className = 'bg-amber-100 border-b border-amber-300 text-amber-800 text-center py-2 text-sm font-medium';
+  setTimeout(function() { banner.classList.add('fade-out'); }, 2500);
+  setTimeout(function() { banner.classList.add('hidden'); }, 3000);
+
+  autoSave();
+  render();
+}
+
+function getFlatState() {
+  var flat = {};
+  var keys = Object.keys(state);
+  for (var i = 0; i < keys.length; i++) {
+    var k = keys[i];
+    var val = state[k].value;
+    if (Array.isArray(val)) val = val.slice();
+    else if (typeof val === 'object' && val !== null) val = Object.assign({}, val);
+    flat[k] = val;
+  }
+  return flat;
+}
+
+function getVmVcpu(vmSize) {
+  for (var i = 0; i < VM_SIZES.length; i++) {
+    if (VM_SIZES[i].name === vmSize) return VM_SIZES[i].vCPU;
+  }
+  return 2;
+}
+
+// ============================================================
+// VALIDATION
+// ============================================================
+
+function validateStep(stepNum) {
+  var result = { errors: [], warnings: [], infos: [] };
+  if (stepNum === 1) {
+    var name = getVal('customerName') || '';
+    if (!name) {
+      result.errors.push('Customer name is required.');
+    } else {
+      if (!/^[a-zA-Z0-9-]+$/.test(name)) {
+        result.errors.push('Customer name must contain only alphanumeric characters and hyphens.');
+      }
+      if (name.length > 15) {
+        result.errors.push('Customer name must be 15 characters or less.');
+      }
+    }
+    if (!getVal('location')) {
+      result.errors.push('Region is required.');
+    }
+  }
+  if (stepNum === 2) {
+    var ids = getVal('adminGroupObjectIds') || [];
+    var nonEmpty = ids.filter(function(id) { return id.trim() !== ''; });
+    if (nonEmpty.length === 0) {
+      result.errors.push('At least one Admin Group Object ID is required.');
+    } else {
+      var guidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      for (var i = 0; i < nonEmpty.length; i++) {
+        if (!guidRe.test(nonEmpty[i].trim())) {
+          result.errors.push('Admin Group Object ID "' + escapeHtml(nonEmpty[i]) + '" is not a valid GUID (expected format: 00000000-0000-0000-0000-000000000000).');
+        }
+      }
+    }
+    if (!getVal('tagCostCenter')) {
+      result.errors.push('Tag: CostCenter is required.');
+    }
+    if (!getVal('tagOwner')) {
+      result.errors.push('Tag: Owner is required.');
+    }
+    if (!getVal('tagProject')) {
+      result.errors.push('Tag: Project is required.');
+    }
+  }
+  if (stepNum === 3) {
+    var vnet = getVal('vnetAddressPrefix') || '';
+    var aksSub = getVal('aksSubnetPrefix') || '';
+    var svcSub = getVal('servicesSubnetPrefix') || '';
+    var peSub = getVal('privateEndpointSubnetPrefix') || '';
+    var svcCidr = getVal('serviceCidr') || '';
+    var dnsIp = getVal('dnsServiceIP') || '';
+
+    if (!parseCIDR(vnet)) result.errors.push('VNet address prefix is not a valid CIDR.');
+    if (!parseCIDR(aksSub)) result.errors.push('AKS subnet prefix is not a valid CIDR.');
+    if (!parseCIDR(svcSub)) result.errors.push('Services subnet prefix is not a valid CIDR.');
+    if (!parseCIDR(peSub)) result.errors.push('PE subnet prefix is not a valid CIDR.');
+    if (!parseCIDR(svcCidr)) result.errors.push('Service CIDR is not a valid CIDR.');
+
+    if (parseCIDR(vnet)) {
+      if (parseCIDR(aksSub) && !isWithinCIDR(aksSub, vnet)) result.errors.push('AKS subnet must be within the VNet CIDR.');
+      if (parseCIDR(svcSub) && !isWithinCIDR(svcSub, vnet)) result.errors.push('Services subnet must be within the VNet CIDR.');
+      if (parseCIDR(peSub) && !isWithinCIDR(peSub, vnet)) result.errors.push('PE subnet must be within the VNet CIDR.');
+      if (parseCIDR(svcCidr) && cidrsOverlap(svcCidr, vnet)) result.errors.push('Service CIDR must not overlap the VNet address space.');
+    }
+
+    if (parseCIDR(aksSub) && parseCIDR(svcSub) && cidrsOverlap(aksSub, svcSub)) result.errors.push('AKS subnet and Services subnet overlap.');
+    if (parseCIDR(aksSub) && parseCIDR(peSub) && cidrsOverlap(aksSub, peSub)) result.errors.push('AKS subnet and PE subnet overlap.');
+    if (parseCIDR(svcSub) && parseCIDR(peSub) && cidrsOverlap(svcSub, peSub)) result.errors.push('Services subnet and PE subnet overlap.');
+
+    if (dnsIp && !/^\d+\.\d+\.\d+\.\d+$/.test(dnsIp)) {
+      result.errors.push('DNS service IP is not a valid IP address.');
+    } else if (parseCIDR(svcCidr) && dnsIp && !isIPInCIDR(dnsIp, svcCidr)) {
+      result.errors.push('DNS service IP must be within the Service CIDR.');
+    }
+
+    // Capacity warning: estimate required IPs for AKS subnet
+    if (parseCIDR(aksSub)) {
+      var sysAutoscaling = getVal('systemAutoscaling');
+      var sysMaxCount = getVal('systemNodeMaxCount');
+      var sysCount = getVal('systemNodeCount');
+      var userAutoscaling = getVal('userAutoscaling');
+      var userMaxCount = getVal('userNodeMaxCount');
+      var userCount = getVal('userNodeCount');
+      var maxPods = getVal('maxPodsPerNode');
+
+      var envDef = ENV_DEFAULTS[getVal('environment') || 'dev'] || ENV_DEFAULTS.dev;
+      var maxSystemNodes = (sysAutoscaling !== undefined && sysAutoscaling !== null)
+        ? (sysAutoscaling ? (sysMaxCount !== undefined ? sysMaxCount : envDef.systemNodeMaxCount) : (sysCount !== undefined ? sysCount : envDef.systemNodeCount))
+        : envDef.systemNodeMaxCount;
+      var maxUserNodes = (userAutoscaling !== undefined && userAutoscaling !== null)
+        ? (userAutoscaling ? (userMaxCount !== undefined ? userMaxCount : envDef.userNodeMaxCount) : (userCount !== undefined ? userCount : envDef.userNodeCount))
+        : envDef.userNodeMaxCount;
+      var podsPerNode = (maxPods !== undefined && maxPods !== null) ? maxPods : envDef.maxPodsPerNode;
+
+      var requiredIPs = (maxSystemNodes + maxUserNodes) * podsPerNode + (maxSystemNodes + maxUserNodes);
+      var aksCapacity = Math.max(0, cidrCapacity(aksSub) - 5); // Azure reserves 5 IPs per subnet
+      if (requiredIPs > aksCapacity) {
+        result.warnings.push(
+          'AKS subnet capacity may be insufficient. Estimated required IPs: ' + requiredIPs +
+          ' (nodes: ' + (maxSystemNodes + maxUserNodes) + ', pods/node: ' + podsPerNode + ')' +
+          ', subnet capacity: ' + aksCapacity + '. Consider enlarging the AKS subnet.'
+        );
+      }
+    }
+  }
+  if (stepNum === 4) {
+    var sysAuto = getVal('systemAutoscaling');
+    if (sysAuto) {
+      var sMinCount = getVal('systemNodeMinCount');
+      var sMaxCount = getVal('systemNodeMaxCount');
+      if (!sMinCount || sMinCount < 1) {
+        result.errors.push('System pool minimum node count must be at least 1.');
+      }
+      if (!sMaxCount || sMaxCount < 1) {
+        result.errors.push('System pool maximum node count must be at least 1.');
+      }
+      if (sMinCount >= 1 && sMaxCount >= 1 && sMaxCount < sMinCount) {
+        result.errors.push('System pool maximum node count must be greater than or equal to minimum node count.');
+      }
+    } else {
+      var sCount = getVal('systemNodeCount');
+      if (!sCount || sCount < 1) {
+        result.errors.push('System pool node count must be at least 1.');
+      }
+    }
+
+    var userAuto = getVal('userAutoscaling');
+    if (userAuto) {
+      var uMinCount = getVal('userNodeMinCount');
+      var uMaxCount = getVal('userNodeMaxCount');
+      if (!uMinCount || uMinCount < 1) {
+        result.errors.push('User pool minimum node count must be at least 1.');
+      }
+      if (!uMaxCount || uMaxCount < 1) {
+        result.errors.push('User pool maximum node count must be at least 1.');
+      }
+      if (uMinCount >= 1 && uMaxCount >= 1 && uMaxCount < uMinCount) {
+        result.errors.push('User pool maximum node count must be greater than or equal to minimum node count.');
+      }
+    } else {
+      var uCount = getVal('userNodeCount');
+      if (!uCount || uCount < 1) {
+        result.errors.push('User pool node count must be at least 1.');
+      }
+    }
+  }
+  if (stepNum === 5) {
+    var privateCluster = getVal('enablePrivateCluster');
+    var acrEnabled = getVal('deployAcr');
+    var acrSkuVal = getVal('acrSku') || 'Standard';
+    if (privateCluster && acrEnabled && acrSkuVal !== 'Premium') {
+      result.warnings.push('Private clusters require Premium ACR SKU for private endpoints.');
+    }
+    var monitoringEnabled = getVal('deployMonitoring');
+    if (!monitoringEnabled) {
+      var ecosystemToolsVal = getVal('ecosystemTools') || {};
+      var monitoringTools = ['kube-prometheus-stack', 'azure-monitor'];
+      var hasMonitoringTool = false;
+      for (var mt = 0; mt < monitoringTools.length; mt++) {
+        if (ecosystemToolsVal[monitoringTools[mt]]) {
+          hasMonitoringTool = true;
+          break;
+        }
+      }
+      if (hasMonitoringTool) {
+        result.warnings.push('Monitoring is disabled but monitoring ecosystem tools are selected.');
+      }
+    }
+  }
+  if (stepNum === 6) {
+    var ecoTools = getVal('ecosystemTools') || {};
+
+    // Check conflict pairs across all categories (deduplicated)
+    var seenConflicts = {};
+    var catKeys6 = Object.keys(ECOSYSTEM_TOOLS);
+    for (var ci6 = 0; ci6 < catKeys6.length; ci6++) {
+      var cat6Tools = ECOSYSTEM_TOOLS[catKeys6[ci6]].tools;
+      for (var ti6 = 0; ti6 < cat6Tools.length; ti6++) {
+        var tool6 = cat6Tools[ti6];
+        if (!ecoTools[tool6.id]) continue;
+        if (!tool6.conflicts) continue;
+        for (var xi = 0; xi < tool6.conflicts.length; xi++) {
+          var conflictId = tool6.conflicts[xi];
+          if (ecoTools[conflictId]) {
+            var pairKey = [tool6.id, conflictId].sort().join('::');
+            if (seenConflicts[pairKey]) continue;
+            seenConflicts[pairKey] = true;
+            // Find the conflicting tool label
+            var conflictLabel = conflictId;
+            var catKeys6b = Object.keys(ECOSYSTEM_TOOLS);
+            for (var ci6b = 0; ci6b < catKeys6b.length; ci6b++) {
+              var cat6bTools = ECOSYSTEM_TOOLS[catKeys6b[ci6b]].tools;
+              for (var ti6b = 0; ti6b < cat6bTools.length; ti6b++) {
+                if (cat6bTools[ti6b].id === conflictId) {
+                  conflictLabel = cat6bTools[ti6b].label;
+                }
+              }
+            }
+            result.warnings.push(tool6.label + ' and ' + conflictLabel + ' cannot be used together.');
+          }
+        }
+      }
+    }
+
+    // Check requirements for each enabled tool
+    var catKeys6r = Object.keys(ECOSYSTEM_TOOLS);
+    for (var ci6r = 0; ci6r < catKeys6r.length; ci6r++) {
+      var cat6rTools = ECOSYSTEM_TOOLS[catKeys6r[ci6r]].tools;
+      for (var ti6r = 0; ti6r < cat6rTools.length; ti6r++) {
+        var tool6r = cat6rTools[ti6r];
+        if (!ecoTools[tool6r.id]) continue;
+        if (!tool6r.requirements) continue;
+        var reqMsgs6 = tool6r.requirements(state);
+        if (reqMsgs6 && reqMsgs6.length) {
+          for (var ri6 = 0; ri6 < reqMsgs6.length; ri6++) {
+            result.warnings.push(tool6r.label + ': ' + reqMsgs6[ri6]);
+          }
+        }
+      }
+    }
+  }
+  return result;
+}
+
+function validateAllSteps() {
+  var all = { errors: [], warnings: [], infos: [] };
+  for (var i = 1; i <= STEPS.length; i++) {
+    var r = validateStep(i);
+    for (var j = 0; j < r.errors.length; j++) all.errors.push('Step ' + i + ': ' + r.errors[j]);
+    for (var j = 0; j < r.warnings.length; j++) all.warnings.push('Step ' + i + ': ' + r.warnings[j]);
+    for (var j = 0; j < r.infos.length; j++) all.infos.push('Step ' + i + ': ' + r.infos[j]);
+  }
+  return all;
+}
+
+// ============================================================
+// CIDR_UTILS
+// ============================================================
+
+function parseCIDR(cidr) {
+  if (!cidr || typeof cidr !== 'string') return null;
+  var m = cidr.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d+)$/);
+  if (!m) return null;
+  var parts = [+m[1], +m[2], +m[3], +m[4]];
+  var prefix = +m[5];
+  for (var i = 0; i < parts.length; i++) {
+    if (parts[i] < 0 || parts[i] > 255) return null;
+  }
+  if (prefix < 0 || prefix > 32) return null;
+  var ip = ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+  return { ip: ip, prefix: prefix };
+}
+
+function cidrCapacity(cidr) {
+  var p = parseCIDR(cidr);
+  if (!p) return 0;
+  if (p.prefix >= 31) return p.prefix === 32 ? 1 : 2;
+  return Math.pow(2, 32 - p.prefix) - 2;
+}
+
+function cidrRange(cidr) {
+  var p = parseCIDR(cidr);
+  if (!p) return null;
+  var mask = p.prefix === 0 ? 0 : (0xFFFFFFFF << (32 - p.prefix)) >>> 0;
+  var start = (p.ip & mask) >>> 0;
+  var end = (start | (~mask >>> 0)) >>> 0;
+  return { start: start, end: end };
+}
+
+function isWithinCIDR(inner, outer) {
+  var ri = cidrRange(inner);
+  var ro = cidrRange(outer);
+  if (!ri || !ro) return false;
+  return ri.start >= ro.start && ri.end <= ro.end;
+}
+
+function cidrsOverlap(a, b) {
+  var ra = cidrRange(a);
+  var rb = cidrRange(b);
+  if (!ra || !rb) return false;
+  return ra.start <= rb.end && rb.start <= ra.end;
+}
+
+function isIPInCIDR(ip, cidr) {
+  var m = ip.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (!m) return false;
+  if (+m[1] > 255 || +m[2] > 255 || +m[3] > 255 || +m[4] > 255) return false;
+  var ipNum = ((+m[1] << 24) | (+m[2] << 16) | (+m[3] << 8) | +m[4]) >>> 0;
+  var r = cidrRange(cidr);
+  if (!r) return false;
+  return ipNum >= r.start && ipNum <= r.end;
+}
+
+function suggestSubnets(vnetPrefix) {
+  var p = parseCIDR(vnetPrefix);
+  if (!p) return { aksSubnet: '', servicesSubnet: '', peSubnet: '' };
+  var mask = p.prefix === 0 ? 0 : (0xFFFFFFFF << (32 - p.prefix)) >>> 0;
+  var base = (p.ip & mask) >>> 0;
+  var aksStart = base;
+  var aks = ((aksStart >>> 24) & 0xFF) + '.' + ((aksStart >>> 16) & 0xFF) + '.' + ((aksStart >>> 8) & 0xFF) + '.' + (aksStart & 0xFF) + '/20';
+  var svcStart = (base + 16 * 256) >>> 0;
+  var svc = ((svcStart >>> 24) & 0xFF) + '.' + ((svcStart >>> 16) & 0xFF) + '.' + ((svcStart >>> 8) & 0xFF) + '.' + (svcStart & 0xFF) + '/24';
+  var peStart = (base + 17 * 256) >>> 0;
+  var pe = ((peStart >>> 24) & 0xFF) + '.' + ((peStart >>> 16) & 0xFF) + '.' + ((peStart >>> 8) & 0xFF) + '.' + (peStart & 0xFF) + '/24';
+  // Validate suggestions fit inside VNet
+  if (!isWithinCIDR(aks, vnetPrefix) || !isWithinCIDR(svc, vnetPrefix) || !isWithinCIDR(pe, vnetPrefix)) {
+    return { aksSubnet: '', servicesSubnet: '', peSubnet: '' };
+  }
+  return { aksSubnet: aks, servicesSubnet: svc, peSubnet: pe };
+}
+
+// ============================================================
+// RENDER
+// ============================================================
+
+function render() {
+  renderStepNav();
+  renderCurrentStep();
+  updateNavButtons();
+}
+
+function renderStepNav() {
+  var nav = document.getElementById('stepNav');
+  var html = '';
+  for (var i = 0; i < STEPS.length; i++) {
+    var s = STEPS[i];
+    var v = validateStep(s.num);
+    var active = s.num === currentStep;
+    var dot = '';
+    if (v.errors.length > 0) dot = '<span class="w-2 h-2 rounded-full bg-red-500 inline-block ml-2"></span>';
+    else if (v.warnings.length > 0) dot = '<span class="w-2 h-2 rounded-full bg-yellow-400 inline-block ml-2"></span>';
+    html += '<button onclick="goToStep(' + s.num + ')" class="w-full text-left px-3 py-2 rounded-lg mb-1 text-sm flex items-center justify-between ' +
+      (active ? 'bg-blue-100 text-blue-800 font-semibold' : 'text-gray-600 hover:bg-gray-100') + '">' +
+      '<span><span class="text-xs text-gray-400 mr-2">' + s.num + '.</span>' + s.title + '</span>' + dot + '</button>';
+  }
+  nav.innerHTML = html;
+}
+
+function renderCurrentStep() {
+  var main = document.getElementById('mainContent');
+  var html = '';
+  switch (currentStep) {
+    case 1: html = renderStep1(); break;
+    case 2: html = renderStep2(); break;
+    case 3: html = renderStep3(); break;
+    case 4: html = renderStep4(); break;
+    case 5: html = renderStep5(); break;
+    case 6: html = renderStep6(); break;
+    case 7: html = renderStep7(); break;
+  }
+  main.innerHTML = html;
+}
+
+function updateNavButtons() {
+  var btnPrev = document.getElementById('btnPrev');
+  var btnNext = document.getElementById('btnNext');
+  btnPrev.disabled = currentStep === 1;
+  if (currentStep === STEPS.length) {
+    btnNext.textContent = 'Generate';
+    btnNext.className = 'px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700';
+  } else {
+    btnNext.textContent = 'Next';
+    btnNext.className = 'px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700';
+  }
+}
+
+var _generated = false;
+function nextStep() {
+  var v = validateStep(currentStep);
+  if (v.errors.length > 0) {
+    render();
+    return;
+  }
+  if (currentStep === STEPS.length) {
+    generatePackage();
+    return;
+  }
+  if (currentStep < STEPS.length) {
+    currentStep++;
+    _generated = false;
+    render();
+    window.scrollTo(0, 0);
+  }
+}
+
+function generatePackage() {
+  var allV = validateAllSteps();
+  if (allV.errors.length > 0) {
+    render();
+    window.scrollTo(0, 0);
+    return;
+  }
+  _generated = true;
+  render();
+  // Scroll to the download section
+  var dlSection = document.getElementById('downloadSection');
+  if (dlSection) dlSection.scrollIntoView({ behavior: 'smooth' });
+}
+
+function prevStep() {
+  if (currentStep > 1) {
+    currentStep--;
+    render();
+    window.scrollTo(0, 0);
+  }
+}
+
+function goToStep(n) {
+  if (n >= 1 && n <= STEPS.length) {
+    if (n !== currentStep) _generated = false;
+    currentStep = n;
+    render();
+    window.scrollTo(0, 0);
+  }
+}
+
+// ============================================================
+// UI HELPERS
+// ============================================================
+
+function badge(level) {
+  var map = {
+    params: 'bg-green-100 text-green-700',
+    guide: 'bg-blue-100 text-blue-700',
+    info: 'bg-gray-100 text-gray-600'
+  };
+  var cls = map[level] || map.info;
+  return '<span class="text-xs px-2 py-0.5 rounded-full font-medium ' + cls + '">' + level + '</span>';
+}
+
+function deployBadge(type) {
+  var map = {
+    'AKS add-on': 'bg-purple-100 text-purple-700',
+    'Helm install': 'bg-orange-100 text-orange-700',
+    'Advanced': 'bg-red-100 text-red-700'
+  };
+  var cls = map[type] || 'bg-gray-100 text-gray-600';
+  return '<span class="text-xs px-2 py-0.5 rounded-full font-medium ' + cls + '">' + type + '</span>';
+}
+
+function fieldRow(label, inputHtml, badgeLevel, helpText) {
+  var b = badgeLevel ? badge(badgeLevel) : '';
+  var help = helpText ? '<p class="text-xs text-gray-500 mt-1">' + helpText + '</p>' : '';
+  return '<div class="mb-4">' +
+    '<label class="block text-sm font-medium text-gray-700 mb-1">' + label + ' ' + b + '</label>' +
+    inputHtml + help + '</div>';
+}
+
+function errorsHtml(errors) {
+  if (!errors.length) return '';
+  var items = '';
+  for (var i = 0; i < errors.length; i++) items += '<li>' + errors[i] + '</li>';
+  return '<div class="mt-4 bg-red-50 border border-red-200 rounded-lg p-3">' +
+    '<h4 class="text-sm font-semibold text-red-700 mb-1">Errors</h4>' +
+    '<ul class="text-sm text-red-600 list-disc list-inside">' + items + '</ul></div>';
+}
+
+function warningsHtml(warnings) {
+  if (!warnings.length) return '';
+  var items = '';
+  for (var i = 0; i < warnings.length; i++) items += '<li>' + warnings[i] + '</li>';
+  return '<div class="mt-4 bg-yellow-50 border border-yellow-200 rounded-lg p-3">' +
+    '<h4 class="text-sm font-semibold text-yellow-700 mb-1">Warnings</h4>' +
+    '<ul class="text-sm text-yellow-600 list-disc list-inside">' + items + '</ul></div>';
+}
+
+function infoPanel(text) {
+  return '<div class="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-700">' + text + '</div>';
+}
+
+function escapeHtml(text) {
+  var div = document.createElement('div');
+  div.appendChild(document.createTextNode(text));
+  return div.innerHTML;
+}
+
+// ============================================================
+// ARRAY / OBJECT MUTATORS (Step 2)
+// ============================================================
+
+function updateArrayItem(key, index, value) {
+  var arr = (getVal(key) || []).slice();
+  arr[index] = value;
+  setVal(key, arr);
+}
+
+function addArrayItem(key) {
+  var arr = (getVal(key) || []).slice();
+  arr.push('');
+  setValNow(key, arr);
+}
+
+function removeArrayItem(key, index) {
+  var arr = (getVal(key) || []).slice();
+  if (arr.length <= 1) {
+    arr = [''];
+  } else {
+    arr.splice(index, 1);
+  }
+  setValNow(key, arr);
+}
+
+function updateCustomTag(index, field, value) {
+  var tags = (getVal('customTags') || []).map(function(t) { return Object.assign({}, t); });
+  tags[index][field] = value;
+  setVal('customTags', tags);
+}
+
+function addCustomTag() {
+  var tags = (getVal('customTags') || []).map(function(t) { return Object.assign({}, t); });
+  tags.push({ key: '', value: '' });
+  setValNow('customTags', tags);
+}
+
+function removeCustomTag(index) {
+  var tags = (getVal('customTags') || []).map(function(t) { return Object.assign({}, t); });
+  tags.splice(index, 1);
+  setValNow('customTags', tags);
+}
+
+function updateRoleAssignment(index, field, value) {
+  var roles = (getVal('additionalRoleAssignments') || []).map(function(r) { return Object.assign({}, r); });
+  roles[index][field] = value;
+  setVal('additionalRoleAssignments', roles);
+}
+
+function addRoleAssignment() {
+  var roles = (getVal('additionalRoleAssignments') || []).map(function(r) { return Object.assign({}, r); });
+  roles.push({ principalId: '', roleDefinitionId: '', principalType: 'ServicePrincipal' });
+  setValNow('additionalRoleAssignments', roles);
+}
+
+function removeRoleAssignment(index) {
+  var roles = (getVal('additionalRoleAssignments') || []).map(function(r) { return Object.assign({}, r); });
+  roles.splice(index, 1);
+  setValNow('additionalRoleAssignments', roles);
+}
+
+// ============================================================
+// STEP_RENDERERS
+// ============================================================
+
+function renderStep1() {
+  var name = getVal('customerName') || '';
+  var env = getVal('environment') || 'dev';
+  var loc = getVal('location') || '';
+  var isPrivate = getVal('enablePrivateCluster');
+  var k8sVer = getVal('kubernetesVersion') || '1.30';
+
+  var safeName = name || '{name}';
+  var safeNameNoDash = name ? name.replace(/-/g, '') : '{name}';
+  var rgPreview = 'rg-' + safeName + '-' + env + '-' + (loc || '{region}');
+  var aksPreview = 'aks-' + safeName + '-' + env;
+  var acrPreview = 'acr' + safeNameNoDash + env;
+
+  var clusterImplication = isPrivate
+    ? infoPanel('API server only accessible within VNet. Requires Premium ACR for private endpoints.')
+    : infoPanel('API server accessible from internet. Use authorized IP ranges (Step 3) to restrict.');
+
+  var validation = validateStep(1);
+
+  var regionOptions = '<option value="">-- Select region --</option>';
+  for (var i = 0; i < REGIONS.length; i++) {
+    regionOptions += '<option value="' + REGIONS[i] + '"' + (REGIONS[i] === loc ? ' selected' : '') + '>' + REGIONS[i] + '</option>';
+  }
+
+  var versionOptions = '';
+  for (var i = 0; i < K8S_VERSIONS.length; i++) {
+    versionOptions += '<option value="' + K8S_VERSIONS[i] + '"' + (K8S_VERSIONS[i] === k8sVer ? ' selected' : '') + '>' + K8S_VERSIONS[i] + '</option>';
+  }
+
+  var inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500';
+
+  return '<h2 class="text-xl font-bold text-gray-800 mb-1">Step 1: Cluster Basics</h2>' +
+    '<p class="text-sm text-gray-500 mb-6">Core cluster identity, region, and connectivity settings.</p>' +
+
+    fieldRow('Customer Name',
+      '<input type="text" value="' + escapeHtml(name) + '" maxlength="15" data-field="customerName" oninput="setVal(\'customerName\', this.value)" class="' + inputCls + '" placeholder="e.g. contoso">',
+      'params', 'Used to generate Azure resource names. Alphanumeric and hyphens only, max 15 chars recommended.') +
+
+    '<div class="mb-4 bg-gray-50 border border-gray-200 rounded-lg p-3">' +
+      '<p class="text-xs font-medium text-gray-500 mb-2">Resource Name Preview</p>' +
+      '<div id="resourceNamePreview" class="text-xs font-mono text-gray-700 space-y-0.5">' +
+        '<div>Resource Group: <span class="text-blue-700">' + escapeHtml(rgPreview) + '</span></div>' +
+        '<div>AKS Cluster: <span class="text-blue-700">' + escapeHtml(aksPreview) + '</span></div>' +
+        '<div>ACR: <span class="text-blue-700">' + escapeHtml(acrPreview) + '</span></div>' +
+      '</div></div>' +
+
+    fieldRow('Environment',
+      '<select onchange="switchEnvironment(this.value)" class="' + inputCls + '">' +
+        '<option value="dev"' + (env === 'dev' ? ' selected' : '') + '>dev</option>' +
+        '<option value="acc"' + (env === 'acc' ? ' selected' : '') + '>acc</option>' +
+        '<option value="prod"' + (env === 'prod' ? ' selected' : '') + '>prod</option>' +
+      '</select>',
+      'params', 'Switching environment applies default values for non-edited fields.') +
+
+    fieldRow('Region',
+      '<select onchange="setValNow(\'location\', this.value)" class="' + inputCls + '">' + regionOptions + '</select>',
+      'params', 'Azure region for all resources.') +
+
+    fieldRow('Cluster Access',
+      '<div class="flex gap-4">' +
+        '<label class="flex items-center gap-2 cursor-pointer"><input type="radio" name="clusterAccess" value="false"' + (!isPrivate ? ' checked' : '') + ' onchange="setValNow(\'enablePrivateCluster\', false)"><span class="text-sm">Public</span></label>' +
+        '<label class="flex items-center gap-2 cursor-pointer"><input type="radio" name="clusterAccess" value="true"' + (isPrivate ? ' checked' : '') + ' onchange="setValNow(\'enablePrivateCluster\', true)"><span class="text-sm">Private</span></label>' +
+      '</div><div class="mt-2">' + clusterImplication + '</div>',
+      'params', 'Controls API server network accessibility.') +
+
+    fieldRow('Kubernetes Version',
+      '<select onchange="setValNow(\'kubernetesVersion\', this.value)" class="' + inputCls + '">' + versionOptions + '</select>',
+      'params', 'AKS-supported Kubernetes version.') +
+
+    errorsHtml(validation.errors) +
+    warningsHtml(validation.warnings);
+}
+
+function renderStep2() {
+  var inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500';
+  var inputSmCls = 'flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500';
+  var btnDangerCls = 'px-2 py-1.5 text-xs border border-red-300 text-red-600 rounded hover:bg-red-50 flex-shrink-0';
+  var btnAddCls = 'mt-2 px-3 py-1.5 text-xs border border-blue-300 text-blue-600 rounded hover:bg-blue-50';
+
+  var validation = validateStep(2);
+
+  // --- Admin Group Object IDs ---
+  var adminIds = getVal('adminGroupObjectIds') || [];
+  if (adminIds.length === 0) adminIds = [''];
+  var adminRowsHtml = '';
+  for (var i = 0; i < adminIds.length; i++) {
+    var idVal = escapeHtml(adminIds[i]);
+    adminRowsHtml +=
+      '<div class="flex gap-2 mb-2">' +
+        '<input type="text" value="' + idVal + '" placeholder="00000000-0000-0000-0000-000000000000"' +
+          ' data-field="adminGroupObjectIds-' + i + '"' +
+          ' oninput="updateArrayItem(\'adminGroupObjectIds\',' + i + ',this.value)"' +
+          ' class="' + inputSmCls + ' font-mono">' +
+        '<button onclick="removeArrayItem(\'adminGroupObjectIds\',' + i + ')" class="' + btnDangerCls + '" title="Remove">&#x2715;</button>' +
+      '</div>';
+  }
+  var adminGroupField = adminRowsHtml +
+    '<button onclick="addArrayItem(\'adminGroupObjectIds\')" class="' + btnAddCls + '">+ Add Group ID</button>';
+
+  // --- Required Tags ---
+  var tagCostCenter = escapeHtml(getVal('tagCostCenter') || '');
+  var tagOwner = escapeHtml(getVal('tagOwner') || '');
+  var tagProject = escapeHtml(getVal('tagProject') || '');
+
+  // --- Custom Tags ---
+  var customTags = getVal('customTags') || [];
+  var customTagRowsHtml = '';
+  for (var j = 0; j < customTags.length; j++) {
+    var tagKey = escapeHtml(customTags[j].key || '');
+    var tagVal = escapeHtml(customTags[j].value || '');
+    customTagRowsHtml +=
+      '<div class="flex gap-2 mb-2 items-center">' +
+        '<input type="text" value="' + tagKey + '" placeholder="Key"' +
+          ' oninput="updateCustomTag(' + j + ',\'key\',this.value)"' +
+          ' class="' + inputSmCls + '">' +
+        '<span class="text-gray-400 text-sm flex-shrink-0">=</span>' +
+        '<input type="text" value="' + tagVal + '" placeholder="Value"' +
+          ' oninput="updateCustomTag(' + j + ',\'value\',this.value)"' +
+          ' class="' + inputSmCls + '">' +
+        '<button onclick="removeCustomTag(' + j + ')" class="' + btnDangerCls + '" title="Remove">&#x2715;</button>' +
+      '</div>';
+  }
+  var customTagsField = customTagRowsHtml +
+    '<button onclick="addCustomTag()" class="' + btnAddCls + '">+ Add Tag</button>';
+
+  // --- Additional Role Assignments ---
+  var roleAssignments = getVal('additionalRoleAssignments') || [];
+  var roleRowsHtml = '';
+  for (var k = 0; k < roleAssignments.length; k++) {
+    var principalId = escapeHtml(roleAssignments[k].principalId || '');
+    var roleDefId = escapeHtml(roleAssignments[k].roleDefinitionId || '');
+    var principalType = roleAssignments[k].principalType || 'ServicePrincipal';
+    roleRowsHtml +=
+      '<div class="border border-gray-200 rounded-lg p-3 mb-2 bg-gray-50">' +
+        '<div class="flex gap-2 mb-2">' +
+          '<div class="flex-1">' +
+            '<label class="text-xs text-gray-500 mb-1 block">Principal ID (GUID)</label>' +
+            '<input type="text" value="' + principalId + '" placeholder="00000000-0000-0000-0000-000000000000"' +
+              ' oninput="updateRoleAssignment(' + k + ',\'principalId\',this.value)"' +
+              ' class="' + inputCls + ' font-mono">' +
+          '</div>' +
+          '<button onclick="removeRoleAssignment(' + k + ')" class="' + btnDangerCls + ' self-end" title="Remove row">&#x2715;</button>' +
+        '</div>' +
+        '<div class="flex gap-2">' +
+          '<div class="flex-1">' +
+            '<label class="text-xs text-gray-500 mb-1 block">Role Definition ID (GUID)</label>' +
+            '<input type="text" value="' + roleDefId + '" placeholder="00000000-0000-0000-0000-000000000000"' +
+              ' oninput="updateRoleAssignment(' + k + ',\'roleDefinitionId\',this.value)"' +
+              ' class="' + inputCls + ' font-mono">' +
+          '</div>' +
+          '<div class="w-44">' +
+            '<label class="text-xs text-gray-500 mb-1 block">Principal Type</label>' +
+            '<select onchange="updateRoleAssignment(' + k + ',\'principalType\',this.value)" class="' + inputCls + '">' +
+              '<option value="ServicePrincipal"' + (principalType === 'ServicePrincipal' ? ' selected' : '') + '>ServicePrincipal</option>' +
+              '<option value="Group"' + (principalType === 'Group' ? ' selected' : '') + '>Group</option>' +
+              '<option value="User"' + (principalType === 'User' ? ' selected' : '') + '>User</option>' +
+            '</select>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+  }
+  var roleAssignmentsField = roleRowsHtml +
+    '<button onclick="addRoleAssignment()" class="' + btnAddCls + '">+ Add Role Assignment</button>';
+
+  return '<h2 class="text-xl font-bold text-gray-800 mb-1">Step 2: Access &amp; Governance</h2>' +
+    '<p class="text-sm text-gray-500 mb-6">Configure cluster admin groups, resource tags, and additional RBAC assignments.</p>' +
+
+    infoPanel('Azure RBAC is enabled. Local accounts are disabled. Workload Identity and OIDC issuer are enabled by default.') +
+    '<div class="mb-6"></div>' +
+
+    fieldRow('Admin Group Object IDs',
+      adminGroupField,
+      'params',
+      'Azure AD group object IDs granted cluster-admin access. GUID format required (00000000-0000-0000-0000-000000000000). At least one required.') +
+
+    '<h3 class="text-base font-semibold text-gray-700 mb-3 mt-6">Required Tags</h3>' +
+
+    fieldRow('CostCenter ' + badge('params'),
+      '<input type="text" value="' + tagCostCenter + '" placeholder="e.g. IT-1234"' +
+        ' oninput="setVal(\'tagCostCenter\', this.value)" class="' + inputCls + '">',
+      null,
+      'Cost center code for billing and chargeback.') +
+
+    fieldRow('Owner ' + badge('params'),
+      '<input type="text" value="' + tagOwner + '" placeholder="e.g. platform-team"' +
+        ' oninput="setVal(\'tagOwner\', this.value)" class="' + inputCls + '">',
+      null,
+      'Team or individual responsible for this cluster.') +
+
+    fieldRow('Project ' + badge('params'),
+      '<input type="text" value="' + tagProject + '" placeholder="e.g. aks-platform"' +
+        ' oninput="setVal(\'tagProject\', this.value)" class="' + inputCls + '">',
+      null,
+      'Project name associated with this deployment.') +
+
+    '<details class="mt-6 border border-gray-200 rounded-lg">' +
+      '<summary class="px-4 py-3 cursor-pointer text-sm font-semibold text-gray-700 hover:bg-gray-50 rounded-lg select-none">Advanced: Custom Tags &amp; Role Assignments</summary>' +
+      '<div class="px-4 pb-4 pt-2 border-t border-gray-200">' +
+
+        '<h3 class="text-sm font-semibold text-gray-700 mb-2 mt-3">Custom Tags ' + badge('params') + '</h3>' +
+        '<p class="text-xs text-gray-500 mb-3">Additional key-value tags applied to all deployed resources.</p>' +
+        customTagsField +
+
+        '<h3 class="text-sm font-semibold text-gray-700 mb-2 mt-6">Additional Role Assignments ' + badge('params') + '</h3>' +
+        '<p class="text-xs text-gray-500 mb-3">Assign Azure RBAC roles to additional principals on the AKS resource group or cluster scope.</p>' +
+        roleAssignmentsField +
+
+      '</div>' +
+    '</details>' +
+
+    errorsHtml(validation.errors) +
+    warningsHtml(validation.warnings);
+}
+// ============================================================
+// STEP 3 HELPERS
+// ============================================================
+
+function onVnetChange(value) {
+  setValNoRender('vnetAddressPrefix', value);
+  var suggestions = suggestSubnets(value);
+  if (suggestions.aksSubnet && !state.aksSubnetPrefix._edited) {
+    setValNoRender('aksSubnetPrefix', suggestions.aksSubnet);
+  }
+  if (suggestions.servicesSubnet && !state.servicesSubnetPrefix._edited) {
+    setValNoRender('servicesSubnetPrefix', suggestions.servicesSubnet);
+  }
+  if (suggestions.peSubnet && !state.privateEndpointSubnetPrefix._edited) {
+    setValNoRender('privateEndpointSubnetPrefix', suggestions.peSubnet);
+  }
+  autoSave();
+  // Debounced focus-preserving render to update subnet suggestions
+  if (_renderTimer) clearTimeout(_renderTimer);
+  _renderTimer = setTimeout(function() { _renderTimer = null; renderPreservingFocus(); }, 400);
+}
+
+function renderMultiInput(key, values, placeholder) {
+  var inputSmCls = 'flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500';
+  var btnDangerCls = 'px-2 py-1.5 text-xs border border-red-300 text-red-600 rounded hover:bg-red-50 flex-shrink-0';
+  var btnAddCls = 'mt-2 px-3 py-1.5 text-xs border border-blue-300 text-blue-600 rounded hover:bg-blue-50';
+  var arr = values || [];
+  if (arr.length === 0) arr = [''];
+  var html = '';
+  for (var i = 0; i < arr.length; i++) {
+    html +=
+      '<div class="flex gap-2 mb-2">' +
+        '<input type="text" value="' + escapeHtml(arr[i]) + '" placeholder="' + escapeHtml(placeholder) + '"' +
+          ' oninput="updateArrayItem(\'' + key + '\',' + i + ',this.value)"' +
+          ' class="' + inputSmCls + ' font-mono">' +
+        '<button onclick="removeArrayItem(\'' + key + '\',' + i + ')" class="' + btnDangerCls + '" title="Remove">&#x2715;</button>' +
+      '</div>';
+  }
+  html += '<button onclick="addArrayItem(\'' + key + '\')" class="' + btnAddCls + '">+ Add IP Range</button>';
+  return html;
+}
+
+function renderSubnetVisual(s) {
+  var vnet = s.vnetAddressPrefix;
+  var aksCidr = s.aksSubnetPrefix;
+  var svcCidr = s.servicesSubnetPrefix;
+  var peCidr = s.privateEndpointSubnetPrefix;
+
+  var vnetCap = cidrCapacity(vnet);
+  var aksCap = cidrCapacity(aksCidr);
+  var svcCap = cidrCapacity(svcCidr);
+  var peCap = cidrCapacity(peCidr);
+
+  if (!parseCIDR(vnet) || vnetCap === 0) {
+    return '<div class="text-xs text-gray-400 italic">Enter a valid VNet CIDR to see subnet layout.</div>';
+  }
+
+  // Calculate percentages for bar
+  var aksValid = parseCIDR(aksCidr) && isWithinCIDR(aksCidr, vnet);
+  var svcValid = parseCIDR(svcCidr) && isWithinCIDR(svcCidr, vnet);
+  var peValid = parseCIDR(peCidr) && isWithinCIDR(peCidr, vnet);
+
+  var aksCount = aksValid ? aksCap : 0;
+  var svcCount = svcValid ? svcCap : 0;
+  var peCount = peValid ? peCap : 0;
+  var usedCount = aksCount + svcCount + peCount;
+  var freeCount = vnetCap - usedCount;
+  if (freeCount < 0) freeCount = 0;
+
+  var aksPct = vnetCap > 0 ? (aksCount / vnetCap * 100).toFixed(1) : 0;
+  var svcPct = vnetCap > 0 ? (svcCount / vnetCap * 100).toFixed(1) : 0;
+  var pePct = vnetCap > 0 ? (peCount / vnetCap * 100).toFixed(1) : 0;
+  var freePct = vnetCap > 0 ? (freeCount / vnetCap * 100).toFixed(1) : 0;
+
+  var barHtml = '<div class="flex rounded overflow-hidden h-6 text-xs font-medium">';
+  if (aksCount > 0) {
+    barHtml += '<div class="bg-blue-500 text-white flex items-center justify-center overflow-hidden" style="width:' + aksPct + '%">' +
+      (parseFloat(aksPct) > 8 ? 'AKS' : '') + '</div>';
+  }
+  if (svcCount > 0) {
+    barHtml += '<div class="bg-green-500 text-white flex items-center justify-center overflow-hidden" style="width:' + svcPct + '%">' +
+      (parseFloat(svcPct) > 8 ? 'Svc' : '') + '</div>';
+  }
+  if (peCount > 0) {
+    barHtml += '<div class="bg-purple-500 text-white flex items-center justify-center overflow-hidden" style="width:' + pePct + '%">' +
+      (parseFloat(pePct) > 8 ? 'PE' : '') + '</div>';
+  }
+  if (freeCount > 0) {
+    barHtml += '<div class="bg-gray-200 text-gray-500 flex items-center justify-center overflow-hidden" style="width:' + freePct + '%">' +
+      (parseFloat(freePct) > 8 ? 'Free' : '') + '</div>';
+  }
+  barHtml += '</div>';
+
+  var legendHtml = '<div class="flex flex-wrap gap-4 mt-2 text-xs text-gray-600">' +
+    (aksCount > 0 ? '<span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm bg-blue-500"></span>AKS: ' + aksCount.toLocaleString() + ' IPs (' + aksCidr + ')</span>' : '') +
+    (svcCount > 0 ? '<span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm bg-green-500"></span>Services: ' + svcCount.toLocaleString() + ' IPs (' + svcCidr + ')</span>' : '') +
+    (peCount > 0 ? '<span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm bg-purple-500"></span>PE: ' + peCount.toLocaleString() + ' IPs (' + peCidr + ')</span>' : '') +
+    (freeCount > 0 ? '<span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm bg-gray-300"></span>Free: ' + freeCount.toLocaleString() + ' IPs</span>' : '') +
+    '</div>' +
+    '<p class="text-xs text-gray-400 mt-1">VNet total: ' + vnetCap.toLocaleString() + ' IPs (' + vnet + ')</p>';
+
+  return barHtml + legendHtml;
+}
+
+function renderStep3() {
+  var inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500';
+  var validation = validateStep(3);
+
+  var vnet = getVal('vnetAddressPrefix') || '';
+  var aksSub = getVal('aksSubnetPrefix') || '';
+  var svcSub = getVal('servicesSubnetPrefix') || '';
+  var peSub = getVal('privateEndpointSubnetPrefix') || '';
+  var svcCidr = getVal('serviceCidr') || '10.0.0.0/16';
+  var dnsIp = getVal('dnsServiceIP') || '10.0.0.10';
+  var apiIPs = getVal('apiServerAuthorizedIPs') || [];
+  var isPrivate = getVal('enablePrivateCluster');
+
+  var s = {
+    vnetAddressPrefix: vnet,
+    aksSubnetPrefix: aksSub,
+    servicesSubnetPrefix: svcSub,
+    privateEndpointSubnetPrefix: peSub
+  };
+
+  return '<h2 class="text-xl font-bold text-gray-800 mb-1">Step 3: Networking</h2>' +
+    '<p class="text-sm text-gray-500 mb-6">Configure VNet, subnets, and cluster networking parameters.</p>' +
+
+    infoPanel('Network plugin: Azure CNI. Network policy: Azure. Outbound: Load Balancer. These are hardcoded in the current Bicep modules.') +
+    '<div class="mb-6"></div>' +
+
+    fieldRow('VNet Address Prefix',
+      '<input type="text" value="' + escapeHtml(vnet) + '" placeholder="e.g. 10.1.0.0/16"' +
+        ' oninput="onVnetChange(this.value)" class="' + inputCls + ' font-mono">',
+      'params',
+      'CIDR block for the virtual network. Changing this auto-suggests subnet prefixes for fields you have not manually edited.') +
+
+    '<div class="grid grid-cols-3 gap-4 mb-4">' +
+      '<div>' +
+        '<label class="block text-sm font-medium text-gray-700 mb-1">AKS Subnet ' + badge('params') + '</label>' +
+        '<input type="text" value="' + escapeHtml(aksSub) + '" placeholder="e.g. 10.1.0.0/20"' +
+          ' oninput="setVal(\'aksSubnetPrefix\', this.value)" class="' + inputCls + ' font-mono">' +
+        '<p class="text-xs text-gray-500 mt-1">Node and pod IPs. Needs enough space for max pods per node times max node count.</p>' +
+      '</div>' +
+      '<div>' +
+        '<label class="block text-sm font-medium text-gray-700 mb-1">Services Subnet ' + badge('params') + '</label>' +
+        '<input type="text" value="' + escapeHtml(svcSub) + '" placeholder="e.g. 10.1.16.0/24"' +
+          ' oninput="setVal(\'servicesSubnetPrefix\', this.value)" class="' + inputCls + ' font-mono">' +
+        '<p class="text-xs text-gray-500 mt-1">Subnet for AKS internal load balancers and cluster-internal services.</p>' +
+      '</div>' +
+      '<div>' +
+        '<label class="block text-sm font-medium text-gray-700 mb-1">PE Subnet ' + badge('params') + '</label>' +
+        '<input type="text" value="' + escapeHtml(peSub) + '" placeholder="e.g. 10.1.17.0/24"' +
+          ' oninput="setVal(\'privateEndpointSubnetPrefix\', this.value)" class="' + inputCls + ' font-mono">' +
+        '<p class="text-xs text-gray-500 mt-1">Subnet for private endpoints (ACR, Key Vault, etc.). Separate from node subnet.</p>' +
+      '</div>' +
+    '</div>' +
+
+    fieldRow('Service CIDR',
+      '<input type="text" value="' + escapeHtml(svcCidr) + '" placeholder="10.0.0.0/16"' +
+        ' oninput="setVal(\'serviceCidr\', this.value)" class="' + inputCls + ' font-mono">',
+      'params',
+      'IP range for Kubernetes internal services (ClusterIP). Must not overlap VNet address space.') +
+
+    fieldRow('DNS Service IP',
+      '<input type="text" value="' + escapeHtml(dnsIp) + '" placeholder="10.0.0.10"' +
+        ' oninput="setVal(\'dnsServiceIP\', this.value)" class="' + inputCls + ' font-mono">',
+      'params',
+      'IP address within the Service CIDR assigned to the cluster DNS service (CoreDNS).') +
+
+    (!isPrivate ?
+      fieldRow('API Server Authorized IP Ranges',
+        renderMultiInput('apiServerAuthorizedIPs', apiIPs, '0.0.0.0/0'),
+        'guide',
+        'Applied post-deploy via az aks update. Only for public clusters. Leave empty to allow all (not recommended for production).') :
+      '') +
+
+    '<div class="mt-6">' +
+      '<h3 class="text-sm font-semibold text-gray-700 mb-2">Subnet Layout</h3>' +
+      '<div class="bg-gray-50 border border-gray-200 rounded-lg p-4">' +
+        renderSubnetVisual(s) +
+      '</div>' +
+    '</div>' +
+
+    errorsHtml(validation.errors) +
+    warningsHtml(validation.warnings);
+}
+function renderStep4() {
+  var inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500';
+  var inputSmCls = 'w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500';
+
+  var validation = validateStep(4);
+
+  var sysVmSize = getVal('systemNodeVmSize') || 'Standard_D2s_v5';
+  var sysAutoscaling = getVal('systemAutoscaling');
+  var sysCount = getVal('systemNodeCount') !== undefined ? getVal('systemNodeCount') : 1;
+  var sysMin = getVal('systemNodeMinCount') !== undefined ? getVal('systemNodeMinCount') : 1;
+  var sysMax = getVal('systemNodeMaxCount') !== undefined ? getVal('systemNodeMaxCount') : 3;
+
+  var userVmSize = getVal('userNodeVmSize') || 'Standard_D4s_v5';
+  var userAutoscaling = getVal('userAutoscaling');
+  var userCount = getVal('userNodeCount') !== undefined ? getVal('userNodeCount') : 1;
+  var userMin = getVal('userNodeMinCount') !== undefined ? getVal('userNodeMinCount') : 1;
+  var userMax = getVal('userNodeMaxCount') !== undefined ? getVal('userNodeMaxCount') : 5;
+
+  var osDisk = getVal('osDiskSizeGB') !== undefined ? getVal('osDiskSizeGB') : 128;
+  var zones = getVal('availabilityZones') || [];
+  var upgradeChannel = getVal('upgradeChannel') || 'patch';
+  var maxPods = getVal('maxPodsPerNode') !== undefined ? getVal('maxPodsPerNode') : 110;
+
+  // VM size select options builder
+  function vmSizeOptions(selectedName) {
+    var opts = '';
+    for (var i = 0; i < VM_SIZES.length; i++) {
+      var vm = VM_SIZES[i];
+      var label = vm.name + ' (' + vm.vCPU + ' vCPU / ' + vm.ram + ' GB RAM)';
+      opts += '<option value="' + vm.name + '"' + (vm.name === selectedName ? ' selected' : '') + '>' + label + '</option>';
+    }
+    return opts;
+  }
+
+  // Autoscaling toggle builder
+  function autoscalingToggle(key, isOn) {
+    var onCls = isOn
+      ? 'px-4 py-2 text-sm rounded-l-lg border border-blue-600 bg-blue-600 text-white font-medium'
+      : 'px-4 py-2 text-sm rounded-l-lg border border-gray-300 text-gray-600 hover:bg-gray-50';
+    var offCls = !isOn
+      ? 'px-4 py-2 text-sm rounded-r-lg border border-blue-600 bg-blue-600 text-white font-medium'
+      : 'px-4 py-2 text-sm rounded-r-lg border border-gray-300 text-gray-600 hover:bg-gray-50';
+    return '<div class="flex">' +
+      '<button onclick="setValNow(\'' + key + '\', true)" class="' + onCls + '">Enabled</button>' +
+      '<button onclick="setValNow(\'' + key + '\', false)" class="' + offCls + '">Disabled</button>' +
+    '</div>';
+  }
+
+  // Node count fields for system pool
+  var sysCountFields = sysAutoscaling
+    ? '<div class="flex gap-4 items-end mt-3">' +
+        '<div>' +
+          '<label class="block text-xs text-gray-500 mb-1">Min Nodes ' + badge('params') + '</label>' +
+          '<input type="number" min="1" value="' + sysMin + '" oninput="setVal(\'systemNodeMinCount\', parseInt(this.value)||1)" class="' + inputSmCls + '">' +
+        '</div>' +
+        '<div>' +
+          '<label class="block text-xs text-gray-500 mb-1">Max Nodes ' + badge('params') + '</label>' +
+          '<input type="number" min="1" value="' + sysMax + '" oninput="setVal(\'systemNodeMaxCount\', parseInt(this.value)||1)" class="' + inputSmCls + '">' +
+        '</div>' +
+      '</div>'
+    : '<div class="mt-3">' +
+        '<label class="block text-xs text-gray-500 mb-1">Node Count ' + badge('params') + '</label>' +
+        '<input type="number" min="1" value="' + sysCount + '" oninput="setVal(\'systemNodeCount\', parseInt(this.value)||1)" class="' + inputSmCls + '">' +
+      '</div>';
+
+  // Node count fields for user pool
+  var userCountFields = userAutoscaling
+    ? '<div class="flex gap-4 items-end mt-3">' +
+        '<div>' +
+          '<label class="block text-xs text-gray-500 mb-1">Min Nodes ' + badge('params') + '</label>' +
+          '<input type="number" min="1" value="' + userMin + '" oninput="setVal(\'userNodeMinCount\', parseInt(this.value)||1)" class="' + inputSmCls + '">' +
+        '</div>' +
+        '<div>' +
+          '<label class="block text-xs text-gray-500 mb-1">Max Nodes ' + badge('params') + '</label>' +
+          '<input type="number" min="1" value="' + userMax + '" oninput="setVal(\'userNodeMaxCount\', parseInt(this.value)||1)" class="' + inputSmCls + '">' +
+        '</div>' +
+      '</div>'
+    : '<div class="mt-3">' +
+        '<label class="block text-xs text-gray-500 mb-1">Node Count ' + badge('params') + '</label>' +
+        '<input type="number" min="1" value="' + userCount + '" oninput="setVal(\'userNodeCount\', parseInt(this.value)||1)" class="' + inputSmCls + '">' +
+      '</div>';
+
+  // Upgrade channel options
+  var channelOptions = '';
+  for (var ci = 0; ci < UPGRADE_CHANNELS.length; ci++) {
+    channelOptions += '<option value="' + UPGRADE_CHANNELS[ci] + '"' + (UPGRADE_CHANNELS[ci] === upgradeChannel ? ' selected' : '') + '>' + UPGRADE_CHANNELS[ci] + '</option>';
+  }
+
+  // Availability zones checkboxes
+  var zonesHtml = '';
+  for (var z = 1; z <= 3; z++) {
+    var zStr = String(z);
+    var checked = zones.indexOf(zStr) !== -1;
+    zonesHtml += '<label class="flex items-center gap-2 cursor-pointer mr-4">' +
+      '<input type="checkbox"' + (checked ? ' checked' : '') + ' onchange="toggleZone(\'' + zStr + '\')" class="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">' +
+      '<span class="text-sm text-gray-700">Zone ' + zStr + '</span>' +
+    '</label>';
+  }
+
+  return '<h2 class="text-xl font-bold text-gray-800 mb-1">Step 4: Compute / Node Pools</h2>' +
+    '<p class="text-sm text-gray-500 mb-6">Configure VM sizes, autoscaling, and node pool settings for system and user workloads.</p>' +
+
+    // System Pool
+    '<div class="border border-gray-200 rounded-lg p-5 mb-6">' +
+      '<h3 class="text-base font-semibold text-gray-700 mb-4">System Node Pool</h3>' +
+      '<p class="text-xs text-gray-500 mb-4">Hosts Kubernetes system components (kube-system). Requires at least 1 node at all times.</p>' +
+
+      fieldRow('VM Size',
+        '<select onchange="setValNow(\'systemNodeVmSize\', this.value)" class="' + inputCls + '">' + vmSizeOptions(sysVmSize) + '</select>',
+        'params',
+        'Virtual machine size for system pool nodes.') +
+
+      fieldRow('Autoscaling',
+        autoscalingToggle('systemAutoscaling', sysAutoscaling) + sysCountFields,
+        'params',
+        sysAutoscaling ? 'Cluster autoscaler will scale system nodes within the min/max range.' : 'Fixed node count. Cluster autoscaler is disabled for this pool.') +
+    '</div>' +
+
+    // User Pool
+    '<div class="border border-gray-200 rounded-lg p-5 mb-6">' +
+      '<h3 class="text-base font-semibold text-gray-700 mb-4">User Node Pool</h3>' +
+      '<p class="text-xs text-gray-500 mb-4">Hosts application workloads. Can be scaled independently from the system pool.</p>' +
+
+      fieldRow('VM Size',
+        '<select onchange="setValNow(\'userNodeVmSize\', this.value)" class="' + inputCls + '">' + vmSizeOptions(userVmSize) + '</select>',
+        'params',
+        'Virtual machine size for user pool nodes.') +
+
+      fieldRow('Autoscaling',
+        autoscalingToggle('userAutoscaling', userAutoscaling) + userCountFields,
+        'params',
+        userAutoscaling ? 'Cluster autoscaler will scale user nodes within the min/max range.' : 'Fixed node count. Cluster autoscaler is disabled for this pool.') +
+    '</div>' +
+
+    // Shared Settings
+    '<div class="mb-6">' +
+      '<h3 class="text-base font-semibold text-gray-700 mb-4">Shared Settings</h3>' +
+
+      fieldRow('OS Disk Size (GB)',
+        '<div class="flex items-center gap-4">' +
+          '<input type="range" min="30" max="1024" value="' + osDisk + '" oninput="setVal(\'osDiskSizeGB\', parseInt(this.value)); document.getElementById(\'osDiskVal\').textContent = this.value + \' GB\'" class="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600">' +
+          '<span id="osDiskVal" class="text-sm font-mono text-gray-700 w-20 text-right">' + osDisk + ' GB</span>' +
+        '</div>',
+        'params',
+        'OS disk size for all node pool VMs. Range: 30–1024 GB.') +
+
+      fieldRow('Availability Zones',
+        '<div class="flex items-center flex-wrap gap-1 mb-1">' + zonesHtml + '</div>' +
+        '<p class="text-xs text-gray-500 mt-1">Not in current modules</p>',
+        'guide',
+        'Distribute nodes across availability zones for higher resilience. Requires zone-redundant VM sizes and storage.') +
+    '</div>' +
+
+    // Advanced collapsible
+    '<details class="border border-gray-200 rounded-lg mb-6">' +
+      '<summary class="px-4 py-3 cursor-pointer text-sm font-semibold text-gray-700 hover:bg-gray-50 rounded-lg select-none">Advanced Settings</summary>' +
+      '<div class="px-4 pb-4 pt-2 border-t border-gray-200">' +
+
+        fieldRow('Upgrade Channel ' + badge('guide'),
+          '<select onchange="setValNow(\'upgradeChannel\', this.value)" class="' + inputCls + '">' + channelOptions + '</select>' +
+          '<p class="text-xs text-gray-500 mt-1">Not in current modules</p>',
+          null,
+          'Controls automatic Kubernetes version upgrades. "patch" upgrades to latest patch release; "stable" to stable minor; "rapid" to latest minor; "node-image" only upgrades node OS image.') +
+
+        fieldRow('Max Pods Per Node ' + badge('guide'),
+          '<input type="number" min="10" max="250" value="' + maxPods + '" oninput="setVal(\'maxPodsPerNode\', parseInt(this.value)||110)" class="' + inputCls + '">' +
+          '<p class="text-xs text-gray-500 mt-1">Not in current modules</p>',
+          null,
+          'Maximum number of pods that can run on a single node. Range: 10–250. Default: 110. Affects AKS subnet IP requirements.') +
+
+      '</div>' +
+    '</details>' +
+
+    errorsHtml(validation.errors) +
+    warningsHtml(validation.warnings);
+}
+function toggleZone(zone) {
+  var zones = (getVal('availabilityZones') || []).slice();
+  var idx = zones.indexOf(zone);
+  if (idx === -1) {
+    zones.push(zone);
+  } else {
+    zones.splice(idx, 1);
+  }
+  zones.sort();
+  setValNow('availabilityZones', zones);
+}
+
+function renderStep5() {
+  var inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500';
+  var validation = validateStep(5);
+
+  var deployAcr = getVal('deployAcr');
+  var acrSku = getVal('acrSku') || 'Standard';
+  var deployKeyVault = getVal('deployKeyVault');
+  var keyVaultSku = getVal('keyVaultSku') || 'standard';
+  var deployMonitoring = getVal('deployMonitoring');
+  var logRetention = getVal('logRetentionDays') !== undefined ? getVal('logRetentionDays') : 30;
+
+  // Generic enable/disable toggle (green when on)
+  function serviceToggle(key, isOn) {
+    var onCls = isOn
+      ? 'px-4 py-2 text-sm rounded-l-lg border border-green-600 bg-green-600 text-white font-medium'
+      : 'px-4 py-2 text-sm rounded-l-lg border border-gray-300 text-gray-600 hover:bg-gray-50';
+    var offCls = !isOn
+      ? 'px-4 py-2 text-sm rounded-r-lg border border-gray-300 bg-gray-200 text-gray-700 font-medium'
+      : 'px-4 py-2 text-sm rounded-r-lg border border-gray-300 text-gray-600 hover:bg-gray-50';
+    return '<div class="flex">' +
+      '<button onclick="setValNow(\'' + key + '\', true)" class="' + onCls + '">Enabled</button>' +
+      '<button onclick="setValNow(\'' + key + '\', false)" class="' + offCls + '">Disabled</button>' +
+    '</div>';
+  }
+
+  // ACR SKU options
+  var acrSkuOptions = ['Basic', 'Standard', 'Premium'].map(function(s) {
+    return '<option value="' + s + '"' + (s === acrSku ? ' selected' : '') + '>' + s + '</option>';
+  }).join('');
+
+  // Key Vault SKU options
+  var kvSkuOptions = ['standard', 'premium'].map(function(s) {
+    return '<option value="' + s + '"' + (s === keyVaultSku ? ' selected' : '') + '>' + s + '</option>';
+  }).join('');
+
+  // ACR card
+  var acrSkuField = deployAcr
+    ? '<div class="mt-3">' +
+        fieldRow('ACR SKU',
+          '<select onchange="setValNow(\'acrSku\', this.value)" class="' + inputCls + '">' + acrSkuOptions + '</select>',
+          'params',
+          'Registry tier. Premium enables geo-replication and private endpoints.') +
+      '</div>'
+    : '';
+  var acrAcrPullNote = deployAcr
+    ? '<div class="mt-3 bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-700">AcrPull role will be automatically assigned to the AKS managed identity.</div>'
+    : '';
+  var acrCard = '<div class="border border-gray-200 rounded-lg p-5 mb-6">' +
+    '<h3 class="text-base font-semibold text-gray-700 mb-1">Azure Container Registry</h3>' +
+    '<p class="text-xs text-gray-500 mb-4">Private container registry for storing and managing container images.</p>' +
+    fieldRow('Deploy ACR', serviceToggle('deployAcr', deployAcr), 'params', 'Deploy an Azure Container Registry linked to this cluster.') +
+    acrSkuField +
+    '<div class="mt-3">' + infoPanel('Premium SKU enables geo-replication, private endpoints, and zone redundancy. Required for private clusters.') + '</div>' +
+    acrAcrPullNote +
+  '</div>';
+
+  // Key Vault card
+  var kvSkuField = deployKeyVault
+    ? '<div class="mt-3">' +
+        fieldRow('Key Vault SKU',
+          '<select onchange="setValNow(\'keyVaultSku\', this.value)" class="' + inputCls + '">' + kvSkuOptions + '</select>',
+          'params',
+          'standard uses software-protected keys; premium uses HSM-protected keys.') +
+      '</div>'
+    : '';
+  var kvCard = '<div class="border border-gray-200 rounded-lg p-5 mb-6">' +
+    '<h3 class="text-base font-semibold text-gray-700 mb-1">Azure Key Vault</h3>' +
+    '<p class="text-xs text-gray-500 mb-4">Centralized secret, key, and certificate management for cluster workloads.</p>' +
+    fieldRow('Deploy Key Vault', serviceToggle('deployKeyVault', deployKeyVault), 'params', 'Deploy an Azure Key Vault accessible by the cluster managed identity.') +
+    kvSkuField +
+    '<div class="mt-3">' + infoPanel('RBAC authorization, soft delete (90 days), and purge protection enabled by default.') + '</div>' +
+  '</div>';
+
+  // Monitoring card
+  var monitoringFields = deployMonitoring
+    ? '<div class="mt-3">' +
+        fieldRow('Log Retention (days)',
+          '<div class="flex items-center gap-4">' +
+            '<input type="range" min="30" max="730" value="' + logRetention + '" oninput="setVal(\'logRetentionDays\', parseInt(this.value)); document.getElementById(\'logRetentionVal\').textContent = this.value + \' days\'" class="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600">' +
+            '<span id="logRetentionVal" class="text-sm font-mono text-gray-700 w-24 text-right">' + logRetention + ' days</span>' +
+          '</div>',
+          'params',
+          'Number of days to retain logs in the Log Analytics workspace. Range: 30–730 days.') +
+      '</div>'
+    : '';
+  var monitoringCard = '<div class="border border-gray-200 rounded-lg p-5 mb-6">' +
+    '<h3 class="text-base font-semibold text-gray-700 mb-1">Monitoring</h3>' +
+    '<p class="text-xs text-gray-500 mb-4">Observability infrastructure for cluster metrics, logs, and diagnostics.</p>' +
+    fieldRow('Deploy Monitoring', serviceToggle('deployMonitoring', deployMonitoring), 'params', 'Deploy a Log Analytics workspace with Container Insights integration.') +
+    monitoringFields +
+    '<div class="mt-3">' + infoPanel('Log Analytics workspace with Container Insights integration.') + '</div>' +
+  '</div>';
+
+  return '<h2 class="text-xl font-bold text-gray-800 mb-1">Step 5: Platform Services</h2>' +
+    '<p class="text-sm text-gray-500 mb-6">Configure supporting Azure services: container registry, key vault, and monitoring.</p>' +
+    acrCard +
+    kvCard +
+    monitoringCard +
+    errorsHtml(validation.errors) +
+    warningsHtml(validation.warnings);
+}
+function toggleEcoTool(toolId) {
+  var tools = Object.assign({}, getVal('ecosystemTools') || {});
+  tools[toolId] = !tools[toolId];
+  setValNow('ecosystemTools', tools);
+}
+
+function renderToolGuidancePreview(tool, s) {
+  var g = tool.guidance;
+  if (!g) return '';
+
+  var rgName = 'rg-' + (s.customerName || '{name}') + '-' + (s.environment || '{env}') + '-' + (s.location || '{region}');
+  var aksName = 'aks-' + (s.customerName || '{name}') + '-' + (s.environment || '{env}');
+
+  function subVars(cmd) {
+    return cmd.replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName)
+              .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName);
+  }
+
+  var linesHtml = '';
+
+  if (g.commands && g.commands.length) {
+    for (var ci = 0; ci < g.commands.length; ci++) {
+      linesHtml += '<div class="font-mono text-xs text-green-300 mb-1 break-all">' + escapeHtml(subVars(g.commands[ci])) + '</div>';
+    }
+  }
+  if (g.verifyCmd) {
+    linesHtml += '<div class="font-mono text-xs text-blue-300 mt-2 break-all"># Verify</div>';
+    linesHtml += '<div class="font-mono text-xs text-green-300 mb-1 break-all">' + escapeHtml(subVars(g.verifyCmd)) + '</div>';
+  }
+
+  var noteHtml = g.note
+    ? '<p class="text-xs text-yellow-200 mt-2 italic">' + escapeHtml(g.note) + '</p>'
+    : '';
+
+  var disclaimerHtml = '<p class="text-xs text-gray-400 mt-3 border-t border-gray-600 pt-2">Starter commands &mdash; review values for production use.</p>';
+
+  return '<details class="mt-3">' +
+    '<summary class="text-xs text-blue-600 cursor-pointer hover:text-blue-800 select-none font-medium">Show guidance preview</summary>' +
+    '<div class="mt-2 bg-gray-800 rounded-lg p-3">' +
+      linesHtml +
+      noteHtml +
+      disclaimerHtml +
+    '</div>' +
+  '</details>';
+}
+
+function renderStep6() {
+  var validation = validateStep(6);
+  var tools = getVal('ecosystemTools') || {};
+  var s = getFlatState();
+
+  var html = '<h2 class="text-xl font-bold text-gray-800 mb-1">Step 6: Ecosystem Tools</h2>' +
+    '<p class="text-sm text-gray-500 mb-4">Select tools to include in your deployment guide.</p>' +
+    infoPanel('Select the tools to include in your deployment guide. Starter Helm commands and configuration guidance will be generated for each selected tool.') +
+    '<div class="mt-6"></div>';
+
+  var catKeys = Object.keys(ECOSYSTEM_TOOLS);
+  for (var ci = 0; ci < catKeys.length; ci++) {
+    var catKey = catKeys[ci];
+    var category = ECOSYSTEM_TOOLS[catKey];
+
+    html += '<div class="mb-8">';
+    html += '<h3 class="text-base font-semibold text-gray-700 pb-2 mb-4 border-b border-gray-200">' + escapeHtml(category.label) + '</h3>';
+
+    var catTools = category.tools;
+    for (var ti = 0; ti < catTools.length; ti++) {
+      var tool = catTools[ti];
+      var isEnabled = !!tools[tool.id];
+
+      // Evaluate requirements (pass raw state so .value access works)
+      var reqMsgs = tool.requirements ? tool.requirements(state) : [];
+      var reqNotMet = reqMsgs && reqMsgs.length > 0;
+
+      // Toggle button
+      var toggleCls = isEnabled
+        ? 'px-3 py-1 text-xs rounded font-medium border border-blue-600 bg-blue-600 text-white hover:bg-blue-700 flex-shrink-0'
+        : 'px-3 py-1 text-xs rounded font-medium border border-gray-300 text-gray-600 hover:bg-gray-50 flex-shrink-0';
+      var toggleBtn = '<button onclick="toggleEcoTool(\'' + tool.id + '\')" class="' + toggleCls + '">' +
+        (isEnabled ? 'ON' : 'OFF') + '</button>';
+
+      // Warning for unmet requirements when enabled
+      var reqWarningHtml = '';
+      if (isEnabled && reqNotMet) {
+        var reqItems = '';
+        for (var ri = 0; ri < reqMsgs.length; ri++) {
+          reqItems += '<li>' + escapeHtml(reqMsgs[ri]) + '</li>';
+        }
+        reqWarningHtml = '<div class="mt-2 bg-yellow-50 border border-yellow-200 rounded p-2">' +
+          '<ul class="text-xs text-yellow-700 list-disc list-inside">' + reqItems + '</ul>' +
+        '</div>';
+      }
+
+      // Guidance preview when enabled
+      var guidanceHtml = isEnabled ? renderToolGuidancePreview(tool, s) : '';
+
+      var cardBorder = isEnabled ? 'border-blue-300 bg-blue-50' : 'border-gray-200 bg-white';
+
+      html += '<div class="border rounded-lg p-4 mb-3 ' + cardBorder + '">' +
+        '<div class="flex items-start gap-3">' +
+          toggleBtn +
+          '<div class="flex-1 min-w-0">' +
+            '<div class="flex items-center gap-2 flex-wrap">' +
+              '<span class="text-sm font-semibold text-gray-800">' + escapeHtml(tool.label) + '</span>' +
+              deployBadge(tool.deployType) +
+            '</div>' +
+            '<p class="text-xs text-gray-500 mt-1">' + escapeHtml(tool.description) + '</p>' +
+            reqWarningHtml +
+            guidanceHtml +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }
+
+    html += '</div>';
+  }
+
+  html += warningsHtml(validation.warnings);
+
+  return html;
+}
+function renderStep7() {
+  var s = getFlatState();
+  var validation = validateAllSteps();
+
+  var html = '<h2 class="text-xl font-bold text-gray-800 mb-1">Step 7: Review &amp; Generate</h2>' +
+    '<p class="text-sm text-gray-500 mb-6">Review your configuration and download deployment files.</p>';
+
+  // Architecture visual
+  html += renderArchitectureVisual(s);
+
+  // Validation panel
+  html += '<div class="mt-6">';
+  html += '<h3 class="text-base font-semibold text-gray-700 mb-3">Validation</h3>';
+  if (validation.errors.length > 0) {
+    var errItems = '';
+    for (var i = 0; i < validation.errors.length; i++) {
+      errItems += '<li>' + escapeHtml(validation.errors[i]) + '</li>';
+    }
+    html += '<div class="bg-red-50 border border-red-200 rounded-lg p-3 mb-3">' +
+      '<h4 class="text-sm font-semibold text-red-700 mb-1">Errors</h4>' +
+      '<ul class="text-sm text-red-600 list-disc list-inside">' + errItems + '</ul></div>';
+  }
+  if (validation.warnings.length > 0) {
+    var warnItems = '';
+    for (var i = 0; i < validation.warnings.length; i++) {
+      warnItems += '<li>' + escapeHtml(validation.warnings[i]) + '</li>';
+    }
+    html += '<div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3">' +
+      '<h4 class="text-sm font-semibold text-yellow-700 mb-1">Warnings</h4>' +
+      '<ul class="text-sm text-yellow-600 list-disc list-inside">' + warnItems + '</ul></div>';
+  }
+  if (validation.errors.length === 0 && validation.warnings.length === 0) {
+    html += '<div class="bg-green-50 border border-green-200 rounded-lg p-3 mb-3">' +
+      '<p class="text-sm text-green-700 font-medium">All validations passed. Your configuration is ready to generate.</p></div>';
+  }
+  html += '</div>';
+
+  // Security posture summary
+  html += '<details class="mt-6 border border-gray-200 rounded-lg">' +
+    '<summary class="px-4 py-3 text-base font-semibold text-gray-700 cursor-pointer hover:bg-gray-50 select-none">Security Posture Summary</summary>' +
+    '<div class="px-4 pb-4">' +
+    '<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">';
+
+  var secItems = [
+    { label: 'Azure RBAC', value: 'Enabled', on: true },
+    { label: 'Local Accounts', value: 'Disabled', on: true },
+    { label: 'Workload Identity', value: 'Enabled', on: true },
+    { label: 'OIDC Issuer', value: 'Enabled', on: true },
+    { label: 'Private Cluster', value: s.enablePrivateCluster ? 'Yes' : 'No', on: s.enablePrivateCluster },
+    { label: 'Private Endpoints', value: s.enablePrivateCluster ? 'Enabled' : 'Disabled', on: s.enablePrivateCluster },
+    { label: 'Network Policy', value: 'Azure', on: true },
+    { label: 'Key Vault', value: s.deployKeyVault ? 'Enabled' : 'Disabled', on: s.deployKeyVault }
+  ];
+  for (var i = 0; i < secItems.length; i++) {
+    var si = secItems[i];
+    var secBg = si.on ? 'bg-green-50 text-green-700' : 'bg-gray-50 text-gray-500';
+    html += '<div class="' + secBg + ' rounded-lg p-3 text-center">' +
+      '<div class="text-xs font-medium">' + escapeHtml(si.label) + '</div>' +
+      '<div class="text-sm font-semibold mt-1">' + escapeHtml(si.value) + '</div></div>';
+  }
+  html += '</div></div></details>';
+
+  // API Versions panel
+  html += '<details class="border rounded-lg mb-6">' +
+    '<summary class="px-4 py-3 text-base font-semibold text-gray-700 cursor-pointer hover:bg-gray-50 select-none">Resource API Versions</summary>' +
+    '<div class="px-4 pb-4">' +
+    '<p class="text-xs text-gray-500 mb-3">Azure Resource Manager API versions embedded in the generated Bicep modules.</p>' +
+    '<div class="grid grid-cols-2 gap-2">';
+  var apiVersions = [
+    { resource: 'AKS Cluster', version: '2024-09-01' },
+    { resource: 'VNet / NSGs', version: '2024-05-01' },
+    { resource: 'Private Endpoints', version: '2024-05-01' },
+    { resource: 'Private DNS Zones', version: '2024-06-01' },
+    { resource: 'Container Registry', version: '2025-04-01' },
+    { resource: 'Key Vault', version: '2025-05-01' },
+    { resource: 'Log Analytics', version: '2025-07-01' },
+    { resource: 'Managed Identity', version: '2024-11-30' },
+    { resource: 'Role Assignments', version: '2022-04-01' },
+    { resource: 'Diagnostic Settings', version: '2021-05-01-preview' },
+    { resource: 'Resource Groups', version: '2024-03-01' },
+  ];
+  for (var avi = 0; avi < apiVersions.length; avi++) {
+    var av = apiVersions[avi];
+    var isPreview = av.version.indexOf('preview') >= 0;
+    html += '<div class="bg-gray-50 rounded p-2 flex justify-between items-center">' +
+      '<span class="text-xs font-medium text-gray-700">' + escapeHtml(av.resource) + '</span>' +
+      '<span class="text-xs font-mono ' + (isPreview ? 'text-amber-600' : 'text-green-700') + '">' + escapeHtml(av.version) + '</span>' +
+    '</div>';
+  }
+  html += '</div></div></details>';
+
+  // Generate file contents
+  var bicepContent = generateBicepParam(s);
+  var guideContent = generateDeploymentGuide(s);
+  var env = s.environment || 'dev';
+  var bicepFilename = 'main.' + env + '.bicepparam';
+  var guideFilename = 'deployment-guide-' + (s.customerName || 'unnamed') + '-' + env + '.md';
+
+  // Download section — only shown after Generate is clicked
+  html += '<div id="downloadSection" class="mt-6">';
+
+  if (!_generated) {
+    // Before generation: prompt to click Generate
+    html += '<div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">' +
+      '<p class="text-gray-500 text-lg mb-2">Click <strong>Generate</strong> to create your deployment package</p>' +
+      '<p class="text-sm text-gray-400">The package will include all Bicep templates, parameters, and a deployment guide</p>' +
+    '</div>';
+  } else {
+    // After generation: show success banner + file list + previews + downloads
+    html += '<div class="bg-green-50 border border-green-300 rounded-lg p-4 mb-6 flex items-center gap-3">' +
+      '<span class="text-green-600 text-2xl">&#10003;</span>' +
+      '<div>' +
+        '<p class="text-green-800 font-semibold">Package generated successfully</p>' +
+        '<p class="text-green-700 text-sm">Your deployment package is ready for download</p>' +
+      '</div></div>';
+
+    // File list
+    html += '<h3 class="text-base font-semibold text-gray-700 mb-3">Generated Files</h3>' +
+      '<div class="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-6">' +
+      '<pre class="text-xs font-mono text-gray-700 leading-relaxed">infra/\n' +
+      '\u251C\u2500\u2500 main.bicep\n' +
+      '\u251C\u2500\u2500 types.bicep\n' +
+      '\u251C\u2500\u2500 main.' + escapeHtml(env) + '.bicepparam\n' +
+      '\u2514\u2500\u2500 modules/\n' +
+      '    \u251C\u2500\u2500 aks/aksCluster.bicep\n' +
+      '    \u251C\u2500\u2500 network/vnet.bicep\n' +
+      '    \u251C\u2500\u2500 acr/containerRegistry.bicep\n' +
+      '    \u251C\u2500\u2500 keyvault/keyVault.bicep\n' +
+      '    \u251C\u2500\u2500 monitoring/logAnalytics.bicep\n' +
+      '    \u251C\u2500\u2500 identity/managedIdentity.bicep\n' +
+      '    \u251C\u2500\u2500 privateEndpoint/privateEndpoint.bicep\n' +
+      '    \u2514\u2500\u2500 roleAssignment/roleAssignment.bicep\n' +
+      'deployment-guide.md</pre></div>';
+
+    // .bicepparam preview
+    html += '<div class="mb-6">' +
+      '<div class="flex items-center justify-between mb-2">' +
+        '<h3 class="text-base font-semibold text-gray-700">.bicepparam Preview</h3>' +
+        '<div class="flex gap-2">' +
+          '<button onclick="copyToClipboard(generateBicepParam(getFlatState()))" class="px-3 py-1 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50">Copy</button>' +
+          '<button onclick="downloadFile(\'' + escapeHtml(bicepFilename) + '\', generateBicepParam(getFlatState()))" class="px-3 py-1 text-xs rounded border border-blue-300 text-blue-600 hover:bg-blue-50">Download .bicepparam</button>' +
+        '</div></div>' +
+      '<pre class="bg-gray-900 text-green-400 rounded-lg p-4 text-xs font-mono overflow-x-auto max-h-96 overflow-y-auto">' + escapeHtml(bicepContent) + '</pre></div>';
+
+    // Deployment guide preview
+    html += '<div class="mb-6">' +
+      '<div class="flex items-center justify-between mb-2">' +
+        '<h3 class="text-base font-semibold text-gray-700">Deployment Guide Preview</h3>' +
+        '<div class="flex gap-2">' +
+          '<button onclick="copyToClipboard(generateDeploymentGuide(getFlatState()))" class="px-3 py-1 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50">Copy</button>' +
+          '<button onclick="downloadFile(\'' + escapeHtml(guideFilename) + '\', generateDeploymentGuide(getFlatState()))" class="px-3 py-1 text-xs rounded border border-blue-300 text-blue-600 hover:bg-blue-50">Download Guide</button>' +
+        '</div></div>' +
+      '<pre class="bg-gray-50 border border-gray-200 rounded-lg p-4 text-xs font-mono overflow-x-auto max-h-96 overflow-y-auto text-gray-800">' + escapeHtml(guideContent) + '</pre></div>';
+
+    // Individual download: main.bicep
+    html += '<div class="mb-4 flex items-center gap-3">' +
+      '<button onclick="downloadFile(\'main.bicep\', BICEP_TEMPLATES[\'main.bicep\'])" class="px-3 py-1 text-xs rounded border border-blue-300 text-blue-600 hover:bg-blue-50">Download main.bicep</button>' +
+      '<span class="text-xs text-gray-400">Download the main orchestration template individually</span></div>';
+
+    // Download All button
+    html += '<div class="text-center py-4">' +
+      '<button onclick="downloadAllZip()" class="px-8 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-semibold text-base shadow-md">' +
+      'Download Complete Package (.zip)</button>' +
+      '<p class="text-xs text-gray-400 mt-2">All Bicep templates, parameters, and deployment guide</p></div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+// ============================================================
+// ARCHITECTURE VISUAL
+// ============================================================
+
+function renderArchitectureVisual(s) {
+  var rgName = 'rg-' + (s.customerName || '{name}') + '-' + (s.environment || '{env}') + '-' + (s.location || '{region}');
+  var aksName = 'aks-' + (s.customerName || '{name}') + '-' + (s.environment || '{env}');
+  var vnetName = 'vnet-' + (s.customerName || '{name}') + '-' + (s.environment || '{env}');
+  var acrName = 'acr' + (s.customerName || '{name}').replace(/-/g, '') + (s.environment || '{env}');
+
+  var tools = s.ecosystemTools || {};
+  var selectedTools = [];
+  var catKeys = Object.keys(ECOSYSTEM_TOOLS);
+  for (var ci = 0; ci < catKeys.length; ci++) {
+    var catTools = ECOSYSTEM_TOOLS[catKeys[ci]].tools;
+    for (var ti = 0; ti < catTools.length; ti++) {
+      if (tools[catTools[ti].id]) selectedTools.push(catTools[ti].label);
+    }
+  }
+
+  function item(label, enabled) {
+    var cls = enabled ? 'text-green-700 bg-green-50' : 'text-gray-400 bg-gray-50';
+    return '<div class="' + cls + ' rounded px-2 py-1 text-xs font-mono">' + escapeHtml(label) + '</div>';
+  }
+
+  var html = '<div class="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">' +
+    '<h3 class="text-base font-semibold text-gray-700 mb-3">Architecture Overview</h3>' +
+    '<div class="font-mono text-sm">';
+
+  // Resource group
+  html += '<div class="border border-gray-300 rounded-lg p-3">' +
+    '<div class="text-xs font-semibold text-gray-500 mb-2">Resource Group: ' + escapeHtml(rgName) + '</div>';
+
+  // VNet
+  html += '<div class="border border-blue-200 rounded-lg p-3 mb-2 bg-blue-50">' +
+    '<div class="text-xs font-semibold text-blue-700 mb-2">VNet: ' + escapeHtml(vnetName) + ' (' + escapeHtml(s.vnetAddressPrefix || '?') + ')</div>' +
+    '<div class="grid grid-cols-1 md:grid-cols-3 gap-2">' +
+    item('AKS Subnet: ' + (s.aksSubnetPrefix || '?'), true) +
+    item('Services Subnet: ' + (s.servicesSubnetPrefix || '?'), true) +
+    item('PE Subnet: ' + (s.privateEndpointSubnetPrefix || '?'), s.enablePrivateCluster) +
+    '</div></div>';
+
+  // AKS cluster
+  var sysCount = s.systemAutoscaling ? s.systemNodeMinCount + '-' + s.systemNodeMaxCount : s.systemNodeCount;
+  var userCount = s.userAutoscaling ? s.userNodeMinCount + '-' + s.userNodeMaxCount : s.userNodeCount;
+  html += '<div class="border border-purple-200 rounded-lg p-3 mb-2 bg-purple-50">' +
+    '<div class="text-xs font-semibold text-purple-700 mb-2">AKS: ' + escapeHtml(aksName) + ' (v' + escapeHtml(s.kubernetesVersion || '?') + ')</div>' +
+    '<div class="grid grid-cols-1 md:grid-cols-2 gap-2">' +
+    item('System Pool: ' + sysCount + ' x ' + (s.systemNodeVmSize || '?'), true) +
+    item('User Pool: ' + userCount + ' x ' + (s.userNodeVmSize || '?'), true) +
+    '</div></div>';
+
+  // Platform services
+  html += '<div class="grid grid-cols-1 md:grid-cols-3 gap-2 mb-2">' +
+    item('ACR: ' + acrName + ' (' + (s.acrSku || 'Standard') + ')', s.deployAcr) +
+    item('Key Vault (' + (s.keyVaultSku || 'standard') + ')', s.deployKeyVault) +
+    item('Monitoring (retention: ' + (s.logRetentionDays || 30) + 'd)', s.deployMonitoring) +
+    '</div>';
+
+  // Ecosystem tools
+  if (selectedTools.length > 0) {
+    html += '<div class="border border-orange-200 rounded-lg p-3 bg-orange-50">' +
+      '<div class="text-xs font-semibold text-orange-700 mb-2">Ecosystem Tools</div>' +
+      '<div class="flex flex-wrap gap-2">';
+    for (var i = 0; i < selectedTools.length; i++) {
+      html += item(selectedTools[i], true);
+    }
+    html += '</div></div>';
+  }
+
+  html += '</div>'; // end resource group
+  html += '</div></div>'; // end font-mono, end card
+
+  return html;
+}
+
+// ============================================================
+// GENERATORS
+// ============================================================
+
+function bicepString(value) {
+  if (value === null || value === undefined) return "''";
+  var str = String(value);
+  str = str.replace(/'/g, "''");
+  return "'" + str + "'";
+}
+
+function generateBicepParam(s) {
+  var lines = [];
+  lines.push("using 'main.bicep'");
+  lines.push('');
+  lines.push('param customerName = ' + bicepString(s.customerName || ''));
+  lines.push('param environment = ' + bicepString(s.environment || 'dev'));
+  lines.push('param location = ' + bicepString(s.location || 'westeurope'));
+  lines.push('');
+
+  // Tags
+  lines.push('param tags = {');
+  lines.push('  CostCenter: ' + bicepString(s.tagCostCenter || ''));
+  lines.push('  Owner: ' + bicepString(s.tagOwner || ''));
+  lines.push('  Project: ' + bicepString(s.tagProject || ''));
+  var customTags = s.customTags || [];
+  for (var i = 0; i < customTags.length; i++) {
+    var ct = customTags[i];
+    if (ct.key && ct.key.trim()) {
+      var tagKey = ct.key.trim();
+      // Quote tag key if it contains non-identifier characters
+      if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(tagKey)) {
+        lines.push('  ' + tagKey + ': ' + bicepString(ct.value || ''));
+      } else {
+        lines.push('  ' + bicepString(tagKey) + ': ' + bicepString(ct.value || ''));
+      }
+    }
+  }
+  lines.push('}');
+  lines.push('');
+
+  // Features
+  lines.push('param features = {');
+  lines.push('  deployAcr: ' + (s.deployAcr ? 'true' : 'false'));
+  lines.push('  deployKeyVault: ' + (s.deployKeyVault ? 'true' : 'false'));
+  lines.push('  deployMonitoring: ' + (s.deployMonitoring ? 'true' : 'false'));
+  lines.push('}');
+  lines.push('');
+
+  // Network config
+  lines.push('param networkConfig = {');
+  lines.push('  vnetAddressPrefix: ' + bicepString(s.vnetAddressPrefix || ''));
+  lines.push('  aksSubnetPrefix: ' + bicepString(s.aksSubnetPrefix || ''));
+  lines.push('  servicesSubnetPrefix: ' + bicepString(s.servicesSubnetPrefix || ''));
+  lines.push('  privateEndpointSubnetPrefix: ' + bicepString(s.privateEndpointSubnetPrefix || ''));
+  lines.push('}');
+  lines.push('');
+
+  // AKS config
+  var systemCount = s.systemAutoscaling ? (s.systemNodeMinCount || 1) : (s.systemNodeCount || 1);
+  var userCount = s.userAutoscaling ? (s.userNodeMinCount || 1) : (s.userNodeCount || 1);
+
+  lines.push('param aksConfig = {');
+  lines.push('  kubernetesVersion: ' + bicepString(s.kubernetesVersion || '1.30'));
+  lines.push('  systemNodeCount: ' + systemCount);
+  lines.push('  systemNodeVmSize: ' + bicepString(s.systemNodeVmSize || 'Standard_D4s_v5'));
+  lines.push('  userNodeCount: ' + userCount);
+  lines.push('  userNodeVmSize: ' + bicepString(s.userNodeVmSize || 'Standard_D8s_v5'));
+  lines.push('  enablePrivateCluster: ' + (s.enablePrivateCluster ? 'true' : 'false'));
+  lines.push('}');
+  lines.push('');
+
+  // Admin group object IDs
+  var ids = s.adminGroupObjectIds || [];
+  var validIds = [];
+  for (var i = 0; i < ids.length; i++) {
+    var id = (ids[i] || '').trim();
+    if (id) validIds.push(id);
+  }
+  lines.push('param adminGroupObjectIds = [');
+  for (var i = 0; i < validIds.length; i++) {
+    lines.push('  ' + bicepString(validIds[i]));
+  }
+  lines.push(']');
+  lines.push('');
+
+  // ACR SKU
+  lines.push('param acrSku = ' + bicepString(s.acrSku || 'Standard'));
+
+  // Key Vault SKU
+  lines.push('param keyVaultSku = ' + bicepString(s.keyVaultSku || 'standard'));
+
+  // Log retention
+  lines.push('param logRetentionDays = ' + (s.logRetentionDays || 30));
+
+  // Additional role assignments (only if non-empty)
+  var roles = s.additionalRoleAssignments || [];
+  var validRoles = [];
+  for (var i = 0; i < roles.length; i++) {
+    var r = roles[i];
+    if (r.principalId && r.principalId.trim() && r.roleDefinitionId && r.roleDefinitionId.trim()) {
+      validRoles.push(r);
+    }
+  }
+  if (validRoles.length > 0) {
+    lines.push('');
+    lines.push('param additionalRoleAssignments = [');
+    for (var i = 0; i < validRoles.length; i++) {
+      var vr = validRoles[i];
+      lines.push('  {');
+      lines.push('    principalId: ' + bicepString(vr.principalId.trim()));
+      lines.push('    roleDefinitionId: ' + bicepString(vr.roleDefinitionId.trim()));
+      lines.push('    principalType: ' + bicepString(vr.principalType || 'ServicePrincipal'));
+      lines.push('  }');
+    }
+    lines.push(']');
+  }
+
+  return lines.join('\n') + '\n';
+}
+
+function generateDeploymentGuide(s) {
+  var rgName = 'rg-' + (s.customerName || '{name}') + '-' + (s.environment || '{env}') + '-' + (s.location || '{region}');
+  var aksName = 'aks-' + (s.customerName || '{name}') + '-' + (s.environment || '{env}');
+  var env = s.environment || 'dev';
+  var region = s.location || 'westeurope';
+
+  var lines = [];
+  lines.push('# AKS Deployment Guide');
+  lines.push('');
+  lines.push('- **Environment:** ' + env);
+  lines.push('- **Region:** ' + region);
+  lines.push('- **Cluster type:** ' + (s.enablePrivateCluster ? 'Private' : 'Public'));
+  lines.push('');
+
+  // Prerequisites
+  lines.push('## Prerequisites');
+  lines.push('');
+  lines.push('- Azure CLI installed (`az --version`)');
+  lines.push('- Bicep CLI installed (`az bicep version`)');
+  lines.push('- Sufficient permissions to create resources at subscription scope');
+  lines.push('- `kubectl` installed for cluster management');
+  if (s.enablePrivateCluster) {
+    lines.push('- VPN or private network access to the VNet (private cluster)');
+  }
+  lines.push('');
+
+  // Deploy command
+  lines.push('## Deploy');
+  lines.push('');
+  lines.push('```bash');
+  lines.push('az deployment sub create \\');
+  lines.push('  --location ' + region + ' \\');
+  lines.push('  --template-file infra/main.bicep \\');
+  lines.push('  --parameters infra/main.' + env + '.bicepparam');
+  lines.push('```');
+  lines.push('');
+
+  // Connect
+  lines.push('## Connect to Cluster');
+  lines.push('');
+  lines.push('```bash');
+  lines.push('az aks get-credentials --resource-group ' + rgName + ' --name ' + aksName);
+  lines.push('```');
+  lines.push('');
+
+  // Authorized IPs for public cluster
+  var authIPs = s.apiServerAuthorizedIPs || [];
+  var validIPs = [];
+  for (var i = 0; i < authIPs.length; i++) {
+    var ip = (authIPs[i] || '').trim();
+    if (ip) validIPs.push(ip);
+  }
+  if (!s.enablePrivateCluster && validIPs.length > 0) {
+    lines.push('## Configure Authorized IP Ranges');
+    lines.push('');
+    lines.push('```bash');
+    lines.push('az aks update \\');
+    lines.push('  --resource-group ' + rgName + ' \\');
+    lines.push('  --name ' + aksName + ' \\');
+    lines.push('  --api-server-authorized-ip-ranges ' + validIPs.join(','));
+    lines.push('```');
+    lines.push('');
+  }
+
+  // Upgrade channel
+  var upgradeChannel = s.upgradeChannel || 'none';
+  if (upgradeChannel !== 'none') {
+    lines.push('## Configure Upgrade Channel');
+    lines.push('');
+    lines.push('```bash');
+    lines.push('az aks update \\');
+    lines.push('  --resource-group ' + rgName + ' \\');
+    lines.push('  --name ' + aksName + ' \\');
+    lines.push('  --auto-upgrade-channel ' + upgradeChannel);
+    lines.push('```');
+    lines.push('');
+  }
+
+  // Availability zones guidance
+  var azZones = s.availabilityZones || [];
+  if (azZones.length > 0) {
+    lines.push('## Availability Zones');
+    lines.push('');
+    lines.push('This cluster is configured with availability zones: ' + azZones.join(', ') + '.');
+    lines.push('Ensure your persistent volumes use zone-redundant storage (ZRS) for cross-zone resilience.');
+    lines.push('');
+  }
+
+  // Ecosystem tools
+  var tools = s.ecosystemTools || {};
+  var catKeys = Object.keys(ECOSYSTEM_TOOLS);
+  var hasToolSection = false;
+  for (var ci = 0; ci < catKeys.length; ci++) {
+    var catTools = ECOSYSTEM_TOOLS[catKeys[ci]].tools;
+    for (var ti = 0; ti < catTools.length; ti++) {
+      var tool = catTools[ti];
+      if (!tools[tool.id]) continue;
+      if (!hasToolSection) {
+        lines.push('## Ecosystem Tools');
+        lines.push('');
+        hasToolSection = true;
+      }
+      var g = tool.guidance;
+
+      lines.push('### ' + tool.label);
+      lines.push('');
+      lines.push(tool.description);
+      lines.push('');
+
+      if (g && g.commands && g.commands.length) {
+        lines.push('```bash');
+        for (var ci2 = 0; ci2 < g.commands.length; ci2++) {
+          var cmd = g.commands[ci2]
+            .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName)
+            .replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName);
+          lines.push(cmd);
+        }
+        lines.push('```');
+        lines.push('');
+      }
+
+      if (g && g.verifyCmd) {
+        var verifyCmd = g.verifyCmd
+          .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName)
+          .replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName);
+        lines.push('Verify:');
+        lines.push('');
+        lines.push('```bash');
+        lines.push(verifyCmd);
+        lines.push('```');
+        lines.push('');
+      }
+
+      if (g && g.note) {
+        lines.push('> ' + g.note);
+        lines.push('');
+      }
+
+      lines.push('*Starter commands -- review values for production use.*');
+      lines.push('');
+    }
+  }
+
+  // Validation checklist
+  lines.push('## Validation Checklist');
+  lines.push('');
+  lines.push('- [ ] Deployment completed without errors');
+  lines.push('- [ ] `kubectl get nodes` shows all nodes Ready');
+  lines.push('- [ ] Cluster RBAC verified with admin group');
+  if (s.deployAcr) lines.push('- [ ] ACR accessible from AKS cluster');
+  if (s.deployKeyVault) lines.push('- [ ] Key Vault accessible and secrets mounted');
+  if (s.deployMonitoring) lines.push('- [ ] Monitoring and logging operational');
+  if (s.enablePrivateCluster) lines.push('- [ ] Private endpoint connectivity verified');
+  lines.push('- [ ] Network policies tested');
+  lines.push('- [ ] Workload identity functioning');
+  lines.push('');
+
+  return lines.join('\n');
+}
+
+// ============================================================
+// DOWNLOAD / COPY HELPERS
+// ============================================================
+
+function downloadAllZip() {
+  if (typeof JSZip === 'undefined') {
+    showBanner('ZIP download unavailable — JSZip library failed to load. Try individual downloads instead.');
+    return;
+  }
+  var s = getFlatState();
+  var env = s.environment || 'dev';
+  var customerName = s.customerName || 'unnamed';
+  var zip = new JSZip();
+
+  // Add all Bicep template files under infra/
+  var templateKeys = Object.keys(BICEP_TEMPLATES);
+  for (var i = 0; i < templateKeys.length; i++) {
+    zip.file('infra/' + templateKeys[i], BICEP_TEMPLATES[templateKeys[i]]);
+  }
+
+  // Add the generated .bicepparam file
+  var bicepParamFilename = 'main.' + env + '.bicepparam';
+  zip.file('infra/' + bicepParamFilename, generateBicepParam(s));
+
+  // Add the deployment guide
+  zip.file('deployment-guide.md', generateDeploymentGuide(s));
+
+  // Generate and download
+  zip.generateAsync({ type: 'blob' }).then(function(blob) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'aks-deployment-' + customerName + '-' + env + '.zip';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function() { URL.revokeObjectURL(url); }, 100);
+  }).catch(function(err) {
+    console.error('Failed to generate ZIP', err);
+    showBanner('Failed to generate ZIP package. Try individual downloads instead.');
+  });
+}
+
+function downloadFile(filename, content) {
+  var blob = new Blob([content], { type: 'text/plain' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function() { URL.revokeObjectURL(url); }, 100);
+}
+
+function copyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function() {
+      showCopyFeedback('Copied to clipboard');
+    }).catch(function() {
+      fallbackCopy(text);
+    });
+  } else {
+    fallbackCopy(text);
+  }
+}
+
+function fallbackCopy(text) {
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand('copy');
+    showCopyFeedback('Copied to clipboard');
+  } catch (e) {
+    showCopyFeedback('Copy failed');
+  }
+  document.body.removeChild(ta);
+}
+
+function showCopyFeedback(msg) {
+  var el = document.getElementById('saveStatus');
+  if (el) {
+    el.textContent = msg;
+    el.className = 'text-xs text-green-600 absolute right-4 bottom-1';
+    setTimeout(function() {
+      el.textContent = 'Auto-saved';
+      el.className = 'text-xs text-gray-400 absolute right-4 bottom-1';
+    }, 2000);
+  }
+}
+
+// ============================================================
+// PERSISTENCE
+// ============================================================
+
+var STORAGE_KEY = 'aksConfigurator_state';
+var STORAGE_STEP_KEY = 'aksConfigurator_step';
+
+function autoSave() {
+  try {
+    var stateData = {};
+    var keys = Object.keys(state);
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      stateData[k] = { value: state[k].value, _edited: state[k]._edited };
+    }
+    var data = { schemaVersion: SCHEMA_VERSION, state: stateData };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    localStorage.setItem(STORAGE_STEP_KEY, String(currentStep));
+    var el = document.getElementById('saveStatus');
+    if (el) {
+      el.textContent = 'Auto-saved';
+      el.className = 'text-xs text-gray-400 absolute right-4 bottom-1';
+    }
+  } catch (e) {
+    var el = document.getElementById('saveStatus');
+    if (el) {
+      el.textContent = 'Save failed';
+      el.className = 'text-xs text-red-400 absolute right-4 bottom-1';
+    }
+  }
+}
+
+function autoRestore() {
+  var raw = localStorage.getItem(STORAGE_KEY);
+  if (!raw) return false;
+  try {
+    var stored = JSON.parse(raw);
+    if (!stored || typeof stored !== 'object') return false;
+    // Skip restore if schema version doesn't match
+    if (stored.schemaVersion !== SCHEMA_VERSION) return false;
+    var data = stored.state;
+    if (!data || typeof data !== 'object' || !data.environment) return false;
+    state = {};
+    var keys = Object.keys(data);
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      var val = data[k].value;
+      if (Array.isArray(val)) val = val.slice();
+      else if (typeof val === 'object' && val !== null) val = Object.assign({}, val);
+      state[k] = { value: val, _edited: !!data[k]._edited };
+    }
+    var savedStep = localStorage.getItem(STORAGE_STEP_KEY);
+    if (savedStep) {
+      var n = parseInt(savedStep, 10);
+      if (n >= 1 && n <= STEPS.length) currentStep = n;
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function resetState() {
+  if (!confirm('Reset all configuration to defaults? This cannot be undone.')) return;
+  localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(STORAGE_STEP_KEY);
+  currentStep = 1;
+  initState('dev');
+  render();
+}
+
+function saveConfig() {
+  var stateData = {};
+  var keys = Object.keys(state);
+  for (var i = 0; i < keys.length; i++) {
+    var k = keys[i];
+    stateData[k] = { value: state[k].value, _edited: state[k]._edited };
+  }
+  var export_ = {
+    schemaVersion: SCHEMA_VERSION,
+    toolVersion: '1.0',
+    exportedAt: new Date().toISOString(),
+    state: stateData
+  };
+  var filename = 'aks-config-' + (getVal('customerName') || 'unnamed') + '-' + (getVal('environment') || 'dev') + '.json';
+  downloadFile(filename, JSON.stringify(export_, null, 2));
+}
+
+function loadConfig() {
+  var input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.onchange = function(e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function(ev) {
+      try {
+        var parsed = JSON.parse(ev.target.result);
+        var stateData;
+        var versionMismatch = false;
+
+        if (parsed && parsed.schemaVersion !== undefined && parsed.state && typeof parsed.state === 'object' && !Array.isArray(parsed.state)) {
+          // Versioned format
+          if (parsed.schemaVersion !== SCHEMA_VERSION) {
+            versionMismatch = true;
+          }
+          stateData = parsed.state;
+        } else {
+          // Legacy flat format — treat as version mismatch but still load
+          versionMismatch = true;
+          stateData = parsed;
+        }
+
+        var envVal = stateData.environment && stateData.environment.value !== undefined
+          ? stateData.environment.value
+          : (stateData.environment || 'dev');
+        initState(envVal);
+
+        var keys = Object.keys(stateData);
+        for (var i = 0; i < keys.length; i++) {
+          var k = keys[i];
+          if (state[k] !== undefined) {
+            var entry = stateData[k];
+            if (entry && typeof entry === 'object' && entry.value !== undefined) {
+              state[k].value = entry.value;
+              state[k]._edited = !!entry._edited;
+            } else {
+              state[k].value = entry;
+              state[k]._edited = true;
+            }
+          }
+        }
+
+        autoSave();
+        render();
+
+        var banner = document.getElementById('envBanner');
+        if (versionMismatch) {
+          banner.textContent = 'Warning: loaded config schema version does not match current tool version. Some settings may not have been restored correctly.';
+          banner.className = 'bg-red-100 border-b border-red-300 text-red-800 text-center py-2 text-sm font-medium';
+        } else {
+          banner.textContent = 'Configuration loaded successfully.';
+          banner.className = 'bg-green-100 border-b border-green-300 text-green-800 text-center py-2 text-sm font-medium';
+        }
+        setTimeout(function() { banner.classList.add('fade-out'); }, 2500);
+        setTimeout(function() { banner.className = 'hidden'; }, 3000);
+      } catch (err) {
+        alert('Failed to load configuration: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+// ============================================================
+// INIT
+// ============================================================
+
+(function init() {
+  if (!autoRestore()) {
+    initState('dev');
+  }
+  render();
+})();
+</script>
+</body>
+</html>

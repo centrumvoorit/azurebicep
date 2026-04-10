@@ -24,7 +24,7 @@
           "level": "error"
         },
         "use-recent-api-versions": {
-          "level": "warning"
+          "level": "error"
         },
         "explicit-values-for-loc-params": {
           "level": "warning"
