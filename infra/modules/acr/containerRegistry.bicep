@@ -27,7 +27,7 @@ param logAnalyticsWorkspaceId string
 // ACR names cannot contain hyphens and must be globally unique
 var acrName = 'acr${customerName}${environment}'
 
-resource acr 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = {
+resource acr 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
   name: acrName
   location: location
   tags: tags

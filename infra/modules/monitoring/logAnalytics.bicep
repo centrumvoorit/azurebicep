@@ -18,7 +18,7 @@ param retentionDays int
 
 var workspaceName = 'log-${customerName}-${environment}'
 
-resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2025-07-01' = {
   name: workspaceName
   location: location
   tags: tags

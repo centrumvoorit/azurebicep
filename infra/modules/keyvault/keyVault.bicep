@@ -29,7 +29,7 @@ param tenantId string
 
 var keyVaultName = 'kv-${customerName}-${environment}'
 
-resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+resource keyVault 'Microsoft.KeyVault/vaults@2025-05-01' = {
   name: keyVaultName
   location: location
   tags: tags
