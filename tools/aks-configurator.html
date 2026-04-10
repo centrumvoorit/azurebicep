@@ -56,6 +56,8 @@
 // CONSTANTS
 // ============================================================
 
+var SCHEMA_VERSION = 1;
+
 const STEPS = [
   { num: 1, title: 'Cluster Basics' },
   { num: 2, title: 'Access & Governance' },
@@ -2467,12 +2469,13 @@ var STORAGE_STEP_KEY = 'aksConfigurator_step';
 
 function autoSave() {
   try {
-    var data = {};
+    var stateData = {};
     var keys = Object.keys(state);
     for (var i = 0; i < keys.length; i++) {
       var k = keys[i];
-      data[k] = { value: state[k].value, _edited: state[k]._edited };
+      stateData[k] = { value: state[k].value, _edited: state[k]._edited };
     }
+    var data = { schemaVersion: SCHEMA_VERSION, state: stateData };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     localStorage.setItem(STORAGE_STEP_KEY, String(currentStep));
     var el = document.getElementById('saveStatus');
@@ -2493,7 +2496,11 @@ function autoRestore() {
   var raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) return false;
   try {
-    var data = JSON.parse(raw);
+    var stored = JSON.parse(raw);
+    if (!stored || typeof stored !== 'object') return false;
+    // Skip restore if schema version doesn't match
+    if (stored.schemaVersion !== SCHEMA_VERSION) return false;
+    var data = stored.state;
     if (!data || typeof data !== 'object' || !data.environment) return false;
     state = {};
     var keys = Object.keys(data);
@@ -2525,15 +2532,20 @@ function resetState() {
 }
 
 function saveConfig() {
-  var data = getFlatState();
-  var json = JSON.stringify(data, null, 2);
-  var blob = new Blob([json], { type: 'application/json' });
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement('a');
-  a.href = url;
-  a.download = 'aks-config-' + (getVal('customerName') || 'unnamed') + '-' + (getVal('environment') || 'dev') + '.json';
-  a.click();
-  URL.revokeObjectURL(url);
+  var stateData = {};
+  var keys = Object.keys(state);
+  for (var i = 0; i < keys.length; i++) {
+    var k = keys[i];
+    stateData[k] = { value: state[k].value, _edited: state[k]._edited };
+  }
+  var export_ = {
+    schemaVersion: SCHEMA_VERSION,
+    toolVersion: '1.0',
+    exportedAt: new Date().toISOString(),
+    state: stateData
+  };
+  var filename = 'aks-config-' + (getVal('customerName') || 'unnamed') + '-' + (getVal('environment') || 'dev') + '.json';
+  downloadFile(filename, JSON.stringify(export_, null, 2));
 }
 
 function loadConfig() {
@@ -2546,18 +2558,55 @@ function loadConfig() {
     var reader = new FileReader();
     reader.onload = function(ev) {
       try {
-        var data = JSON.parse(ev.target.result);
-        initState(data.environment || 'dev');
-        var keys = Object.keys(data);
+        var parsed = JSON.parse(ev.target.result);
+        var stateData;
+        var versionMismatch = false;
+
+        if (parsed && parsed.schemaVersion !== undefined && parsed.state) {
+          // Versioned format
+          if (parsed.schemaVersion !== SCHEMA_VERSION) {
+            versionMismatch = true;
+          }
+          stateData = parsed.state;
+        } else {
+          // Legacy flat format — treat as version mismatch but still load
+          versionMismatch = true;
+          stateData = parsed;
+        }
+
+        var envVal = stateData.environment && stateData.environment.value !== undefined
+          ? stateData.environment.value
+          : (stateData.environment || 'dev');
+        initState(envVal);
+
+        var keys = Object.keys(stateData);
         for (var i = 0; i < keys.length; i++) {
           var k = keys[i];
           if (state[k] !== undefined) {
-            state[k].value = data[k];
-            state[k]._edited = true;
+            var entry = stateData[k];
+            if (entry && typeof entry === 'object' && entry.value !== undefined) {
+              state[k].value = entry.value;
+              state[k]._edited = !!entry._edited;
+            } else {
+              state[k].value = entry;
+              state[k]._edited = true;
+            }
           }
         }
+
         autoSave();
         render();
+
+        var banner = document.getElementById('envBanner');
+        if (versionMismatch) {
+          banner.textContent = 'Warning: loaded config schema version does not match current tool version. Some settings may not have been restored correctly.';
+          banner.className = 'bg-red-100 border-b border-red-300 text-red-800 text-center py-2 text-sm font-medium';
+        } else {
+          banner.textContent = 'Configuration loaded successfully.';
+          banner.className = 'bg-green-100 border-b border-green-300 text-green-800 text-center py-2 text-sm font-medium';
+        }
+        setTimeout(function() { banner.classList.add('fade-out'); }, 2500);
+        setTimeout(function() { banner.className = 'hidden'; }, 3000);
       } catch (err) {
         alert('Failed to load configuration: ' + err.message);
       }
