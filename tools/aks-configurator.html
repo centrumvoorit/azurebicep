@@ -685,7 +685,11 @@ function validateStep(stepNum) {
     if (parseCIDR(aksSub) && parseCIDR(peSub) && cidrsOverlap(aksSub, peSub)) result.errors.push('AKS subnet and PE subnet overlap.');
     if (parseCIDR(svcSub) && parseCIDR(peSub) && cidrsOverlap(svcSub, peSub)) result.errors.push('Services subnet and PE subnet overlap.');
 
-    if (parseCIDR(svcCidr) && dnsIp && !isIPInCIDR(dnsIp, svcCidr)) result.errors.push('DNS service IP must be within the Service CIDR.');
+    if (dnsIp && !/^\d+\.\d+\.\d+\.\d+$/.test(dnsIp)) {
+      result.errors.push('DNS service IP is not a valid IP address.');
+    } else if (parseCIDR(svcCidr) && dnsIp && !isIPInCIDR(dnsIp, svcCidr)) {
+      result.errors.push('DNS service IP must be within the Service CIDR.');
+    }
 
     // Capacity warning: estimate required IPs for AKS subnet
     if (parseCIDR(aksSub)) {
@@ -707,7 +711,7 @@ function validateStep(stepNum) {
       var podsPerNode = (maxPods !== undefined && maxPods !== null) ? maxPods : envDef.maxPodsPerNode;
 
       var requiredIPs = (maxSystemNodes + maxUserNodes) * podsPerNode + (maxSystemNodes + maxUserNodes);
-      var aksCapacity = cidrCapacity(aksSub);
+      var aksCapacity = Math.max(0, cidrCapacity(aksSub) - 5); // Azure reserves 5 IPs per subnet
       if (requiredIPs > aksCapacity) {
         result.warnings.push(
           'AKS subnet capacity may be insufficient. Estimated required IPs: ' + requiredIPs +
