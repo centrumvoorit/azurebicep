@@ -35,7 +35,7 @@ type networkConfigType = {
 @export()
 @description('AKS cluster configuration')
 type aksConfigType = {
-  @description('Kubernetes version (e.g., 1.30)')
+  @description('Kubernetes version (e.g., 1.35)')
   kubernetesVersion: string
 
   @description('System node pool VM count')

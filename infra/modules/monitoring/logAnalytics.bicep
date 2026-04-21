@@ -27,6 +27,12 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2025-07-01' = {
       name: 'PerGB2018'
     }
     retentionInDays: retentionDays
+    // Enable workspace replication for prod/acc (HA requirement, satisfies
+    // Azure.Log.Replication). Dev stays single-region to keep costs minimal.
+    replication: environment == 'prod' || environment == 'acc' ? {
+      enabled: true
+      location: 'northeurope'
+    } : null
   }
 }
 

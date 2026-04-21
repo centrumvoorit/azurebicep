@@ -25,7 +25,7 @@ param vnetId string
 param logAnalyticsWorkspaceId string
 
 // ACR names cannot contain hyphens and must be globally unique
-var acrName = 'acr${customerName}${environment}'
+var acrName = 'acr${take(toLower(customerName), 8)}${environment}${take(uniqueString(resourceGroup().id), 8)}'
 
 resource acr 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
   name: acrName
@@ -38,6 +38,25 @@ resource acr 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
     adminUserEnabled: false
     publicNetworkAccess: acrSku == 'Premium' ? 'Disabled' : 'Enabled'
     zoneRedundancy: acrSku == 'Premium' && environment == 'prod' ? 'Enabled' : 'Disabled'
+    // Disable artifact export to reduce data exfiltration surface
+    // (satisfies Azure.ACR.ExportPolicy). Only valid on Premium.
+    policies: acrSku == 'Premium' ? {
+      exportPolicy: {
+        status: 'disabled'
+      }
+    } : null
+  }
+}
+
+// Geo-replication for prod/acc Premium registries. Cross-region redundancy
+// satisfies Azure.ACR.GeoReplica. One replica (northeurope) for cost control.
+resource acrGeoReplica 'Microsoft.ContainerRegistry/registries/replications@2025-04-01' = if (acrSku == 'Premium' && (environment == 'prod' || environment == 'acc')) {
+  parent: acr
+  name: 'northeurope'
+  location: 'northeurope'
+  tags: tags
+  properties: {
+    zoneRedundancy: environment == 'prod' ? 'Enabled' : 'Disabled'
   }
 }
 
