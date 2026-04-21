@@ -50,7 +50,7 @@ var denyLateralManagement = {
   }
 }
 
-resource aksNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
+resource aksNsg 'Microsoft.Network/networkSecurityGroups@2024-07-01' = {
   name: aksNsgName
   location: location
   tags: tags
@@ -100,7 +100,7 @@ resource aksNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
   }
 }
 
-resource servicesNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
+resource servicesNsg 'Microsoft.Network/networkSecurityGroups@2024-07-01' = {
   name: servicesNsgName
   location: location
   tags: tags
@@ -137,7 +137,7 @@ resource servicesNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
   }
 }
 
-resource peNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
+resource peNsg 'Microsoft.Network/networkSecurityGroups@2024-07-01' = {
   name: peNsgName
   location: location
   tags: tags
@@ -174,7 +174,7 @@ resource peNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
   }
 }
 
-resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
+resource vnet 'Microsoft.Network/virtualNetworks@2024-07-01' = {
   name: vnetName
   location: location
   tags: tags

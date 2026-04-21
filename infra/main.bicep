@@ -124,6 +124,7 @@ module monitoring 'modules/monitoring/logAnalytics.bicep' = if (features.deployM
     customerName: customerName
     environment: environment
     retentionDays: logRetentionDays
+    dailyQuotaGb: environment == 'dev' ? 1 : -1
   }
 }
 
@@ -189,6 +190,8 @@ module aks 'modules/aks/aksCluster.bicep' = {
     osDiskSizeGB: aksConfig.osDiskSizeGB
     maxPodsPerNode: aksConfig.maxPodsPerNode
     adminGroupObjectIds: adminGroupObjectIds
+    natGatewayOutboundIpCount: aksConfig.?natGatewayOutboundIpCount ?? 1
+    natGatewayIdleTimeoutMinutes: aksConfig.?natGatewayIdleTimeoutMinutes ?? 4
   }
 }
 
