@@ -20,7 +20,7 @@
       <h1 class="text-2xl font-bold">AKS Configurator</h1>
       <p class="text-blue-200 text-sm">Azure Kubernetes Service deployment wizard</p>
     </div>
-    <span class="bg-blue-600 text-blue-100 text-xs px-3 py-1 rounded-full font-mono">v1.3 | Compatible with azurebicep modules v1.x</span>
+    <span class="bg-blue-600 text-blue-100 text-xs px-3 py-1 rounded-full font-mono">v1.4 | Compatible with azurebicep modules v1.x</span>
   </div>
 </header>
 
@@ -1945,7 +1945,7 @@ function initState(env) {
     var val = defaults[f];
     if (val === undefined) {
       if (f === 'customerName') val = '';
-      else if (f === 'adminGroupObjectIds') val = [];
+      else if (f === 'adminGroupObjectIds') val = ['11111111-1111-1111-1111-111111111111'];
       else if (f === 'customTags') val = [];
       else if (f === 'additionalRoleAssignments') val = [];
       else if (f === 'apiServerAuthorizedIPs') val = [];
@@ -2711,7 +2711,7 @@ function renderStep2() {
     var idVal = escapeHtml(adminIds[i]);
     adminRowsHtml +=
       '<div class="flex gap-2 mb-2">' +
-        '<input type="text" value="' + idVal + '" placeholder="00000000-0000-0000-0000-000000000000"' +
+        '<input type="text" value="' + idVal + '" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"' +
           ' data-field="adminGroupObjectIds-' + i + '"' +
           ' oninput="updateArrayItem(\'adminGroupObjectIds\',' + i + ',this.value)"' +
           ' class="' + inputSmCls + ' font-mono">' +
