@@ -1,0 +1,29 @@
+# SuppressionGroups applied by PSRule.
+#
+# PSRule's inline `suppression:` block in ps-rule.yaml only supports exact
+# target-name match. The generated ACR uses `uniqueString(resourceGroup().id)`
+# which produces a hash suffix that varies per PSRule run (e.g.
+# acrcitestdev480ae872). SuppressionGroups support name-pattern conditions.
+#
+# This file only suppresses findings on the DEV test fixture — acc and prod
+# emit geo-replication and exportPolicy and should continue to be scanned.
+---
+apiVersion: github.com/microsoft/PSRule/v1
+kind: SuppressionGroup
+metadata:
+  name: Configurator.Dev.ACR.Suppressions
+spec:
+  rule:
+    - Azure.ACR.GeoReplica
+    - Azure.ACR.ExportPolicy
+  # PSRule selector expression: `name: '.'` means "this target's name", and
+  # the operator (`startsWith:`) sits at the same level.
+  # Matches both the configurator test fixture (customerName: 'citest') and
+  # the infra/ reference deployment (customerName: 'contoso') since both
+  # suffix the ACR name with a uniqueString() hash.
+  if:
+    anyOf:
+      - name: '.'
+        startsWith: 'acrcitestdev'
+      - name: '.'
+        startsWith: 'acrcontosodev'

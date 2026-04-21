@@ -79,7 +79,7 @@ var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
 // Resource Group
 // ============================================================================
 
-resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
+resource rg 'Microsoft.Resources/resourceGroups@2024-11-01' = {
   name: resourceGroupName
   location: location
   tags: envTags
@@ -161,6 +161,7 @@ module keyVault 'modules/keyvault/keyVault.bicep' = if (features.deployKeyVault)
 module aks 'modules/aks/aksCluster.bicep' = {
   name: 'aks-deployment'
   scope: rg
+  dependsOn: features.deployMonitoring ? [ monitoring ] : []
   params: {
     location: location
     tags: envTags
@@ -173,8 +174,20 @@ module aks 'modules/aks/aksCluster.bicep' = {
     enablePrivateCluster: aksConfig.enablePrivateCluster
     systemNodeCount: aksConfig.systemNodeCount
     systemNodeVmSize: aksConfig.systemNodeVmSize
+    systemNodeMinCount: aksConfig.systemNodeMinCount
+    systemNodeMaxCount: aksConfig.systemNodeMaxCount
     userNodeCount: aksConfig.userNodeCount
     userNodeVmSize: aksConfig.userNodeVmSize
+    userNodeMinCount: aksConfig.userNodeMinCount
+    userNodeMaxCount: aksConfig.userNodeMaxCount
+    availabilityZones: aksConfig.availabilityZones
+    apiServerAuthorizedIPRanges: aksConfig.apiServerAuthorizedIPRanges
+    skuTier: aksConfig.skuTier
+    upgradeChannel: aksConfig.upgradeChannel
+    nodeOSUpgradeChannel: aksConfig.nodeOSUpgradeChannel
+    osDiskType: aksConfig.osDiskType
+    osDiskSizeGB: aksConfig.osDiskSizeGB
+    maxPodsPerNode: aksConfig.maxPodsPerNode
     adminGroupObjectIds: adminGroupObjectIds
   }
 }
@@ -182,6 +195,20 @@ module aks 'modules/aks/aksCluster.bicep' = {
 // ============================================================================
 // Role Assignments
 // ============================================================================
+
+// Container Insights Data Collection Rule (only when monitoring deployed)
+module dcr 'modules/monitoring/dcr.bicep' = if (features.deployMonitoring) {
+  name: 'dcr-deployment'
+  scope: rg
+  params: {
+    location: location
+    tags: envTags
+    customerName: customerName
+    environment: environment
+    logAnalyticsWorkspaceId: features.deployMonitoring ? monitoring.outputs.workspaceId : ''
+    aksClusterName: aks.outputs.aksClusterName
+  }
+}
 
 // AKS kubelet identity -> ACR Pull (only when ACR is deployed)
 module roleAcrPull 'modules/roleAssignment/roleAssignment.bicep' = if (features.deployAcr) {

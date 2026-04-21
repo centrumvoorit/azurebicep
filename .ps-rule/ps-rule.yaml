@@ -1,0 +1,165 @@
+# PSRule for Azure configuration
+# Loaded automatically by the microsoft/ps-rule@v2 action (the caller passes
+# `option: .ps-rule/ps-rule.yaml` explicitly to ensure input.pathIgnore is
+# honoured alongside inputPath).
+
+configuration:
+  # Expand .bicep files into ARM so PSRule.Rules.Azure rules can evaluate them.
+  AZURE_BICEP_FILE_EXPANSION: true
+  # Expand .bicepparam files — this drives expansion from the entry point
+  # (param file -> main.bicep -> modules) rather than evaluating each module
+  # in isolation, which fails because modules have no parameter defaults.
+  AZURE_BICEP_PARAMS_FILE_EXPANSION: true
+  # Default is 5s. With Cilium + NAT Gateway + conditional union() merges +
+  # azureMonitorProfile + maintenanceConfigurations + DCR, main.bicep's
+  # symbol resolution occasionally needs longer. 30s gives headroom without
+  # masking real compilation failures.
+  AZURE_BICEP_FILE_EXPANSION_TIMEOUT: 30
+
+input:
+  # Skip files that are not valid entry points:
+  # - modules/** — called with params from main.bicep, no defaults of their own
+  # - main.bicep — designed to be reached through main.<env>.bicepparam;
+  #   direct expansion fails because customerName/environment/tags/etc.
+  #   have no defaults. PSRule enters via the .bicepparam file which
+  #   re-uses main.bicep with concrete values.
+  # Glob is evaluated relative to the scanned root (inputPath).
+  pathIgnore:
+    - 'modules/**'
+    - '**/modules/**'
+    - 'main.bicep'
+    - '**/main.bicep'
+
+# Two customer-name prefixes are in play:
+# - 'citest' — used by tools/test/generate-package.mjs (configurator CI)
+# - 'contoso' — used by infra/main.<env>.bicepparam (reference deployment)
+# Suppressions below list both. Per-customer-prefix SuppressionGroups live
+# in .ps-rule/suppression-groups.Rule.yaml for the hash-suffixed ACR names.
+#
+# Suppressions for PSRule.Rules.Azure rules that predate the AKS 2025-10-01
+# schema. Each rule below is checking a legacy property shape that we
+# intentionally do not emit. The modern equivalent IS configured and
+# satisfies the baseline intent — the rule simply does not inspect the
+# newer properties.
+suppression:
+  Azure.AKS.NetworkPolicy:
+    # We emit networkDataplane: 'cilium' + networkPolicy: 'cilium' with
+    # networkPluginMode: 'overlay'. Rule checks only the legacy value.
+    - aks-citest-dev
+    - aks-citest-acc
+    - aks-citest-prod
+    - aks-contoso-dev
+    - aks-contoso-acc
+    - aks-contoso-prod
+  Azure.AKS.UseRBAC:
+    # We emit aadProfile.managed + enableAzureRBAC. Rule checks the legacy
+    # aadProfile.enableRBAC flag that this schema no longer uses.
+    - aks-citest-dev
+    - aks-citest-acc
+    - aks-citest-prod
+    - aks-contoso-dev
+    - aks-contoso-acc
+    - aks-contoso-prod
+  Azure.AKS.ContainerInsights:
+    # We emit azureMonitorProfile.containerInsights (AMA-based, 2025-10-01
+    # API). Rule checks only legacy addonProfiles.omsagent.
+    - aks-citest-dev
+    - aks-citest-acc
+    - aks-citest-prod
+    - aks-contoso-dev
+    - aks-contoso-acc
+    - aks-contoso-prod
+  Azure.AKS.StandardLB:
+    # outboundType: 'managedNATGateway' replaces loadBalancerSku entirely;
+    # rule's check doesn't apply under the managed-NAT path.
+    - aks-citest-dev
+    - aks-citest-acc
+    - aks-citest-prod
+    - aks-contoso-dev
+    - aks-contoso-acc
+    - aks-contoso-prod
+  Azure.AKS.PoolScaleSet:
+    # agentPoolProfiles default to VirtualMachineScaleSets when type is
+    # omitted (confirmed on 2025-10-01). Rule wants it stated explicitly.
+    - aks-citest-dev
+    - aks-citest-acc
+    - aks-citest-prod
+    - aks-contoso-dev
+    - aks-contoso-acc
+    - aks-contoso-prod
+  Azure.AKS.AuditLogs:
+    # diagnosticSettings uses categoryGroup: 'allLogs' (2021-05-01-preview
+    # shortcut that includes kube-audit + kube-audit-admin). Rule enumerates
+    # individual category names and doesn't recognise the group shortcut.
+    - aks-citest-dev
+    - aks-citest-acc
+    - aks-citest-prod
+    - aks-contoso-dev
+    - aks-contoso-acc
+    - aks-contoso-prod
+  Azure.AKS.PlatformLogs:
+    # Same categoryGroup: 'allLogs' reasoning as Azure.AKS.AuditLogs.
+    - aks-citest-dev
+    - aks-citest-acc
+    - aks-citest-prod
+    - aks-contoso-dev
+    - aks-contoso-acc
+    - aks-contoso-prod
+
+  # Rules that genuinely apply but are environment-gated — dev runs lean;
+  # acc/prod satisfy these rules via Bicep properties emitted conditionally
+  # on environment.
+  Azure.Log.Replication:
+    # Workspace replication is enabled for acc/prod only.
+    - log-citest-dev
+    - log-contoso-dev
+  Azure.AKS.UptimeSLA:
+    # Dev cluster runs with sku.tier: 'Free' for cost control — Free has no
+    # uptime SLA by design. acc/prod use Standard and satisfy the rule.
+    - aks-citest-dev
+    - aks-contoso-dev
+  Azure.AKS.AuthorizedIPs:
+    # Fixture + reference leave apiServerAuthorizedIPs empty on the public
+    # dev cluster. Real dev deployments should populate the field; the
+    # fixture exists to validate the template shape, not a specific IP
+    # allow-list.
+    - aks-citest-dev
+    - aks-contoso-dev
+
+  # Azure.ACR.GeoReplica / ExportPolicy suppression cannot list a literal
+  # target name here — the ACR uses uniqueString(resourceGroup().id) so the
+  # hash suffix varies per PSRule run. See
+  # .ps-rule/suppression-groups.Rule.yaml for the name-pattern suppression
+  # (covers both 'acrcitestdev' and 'acrcontosodev' prefixes).
+
+  # Azure.VNET.PrivateSubnet — the AKS cluster uses outboundType:
+  # 'managedNATGateway', which makes Azure auto-provision a NAT gateway in
+  # the node resource group and attach it to the node subnet at deploy
+  # time. PSRule evaluates the VNet resource statically and cannot see the
+  # runtime attachment; the finding is a false negative under this topology.
+  Azure.VNET.PrivateSubnet:
+    - vnet-citest-dev
+    - vnet-citest-acc
+    - vnet-citest-prod
+    - vnet-contoso-dev
+    - vnet-contoso-acc
+    - vnet-contoso-prod
+
+  # main.bicep is subscription-scoped and contains only module invocations
+  # (Microsoft.Resources/deployments). PSRule's Azure.Template.Resources
+  # rule does not count deployment objects as "resources" and fires a
+  # false positive on every generated main.json.
+  Azure.Template.Resources:
+    - generated-dev/main.json
+    - generated-acc/main.json
+    - generated-prod/main.json
+    - infra/main.json
+
+  # Same reasoning as Azure.Template.Resources — @description on modules
+  # doesn't flow into the compiled ARM /resources[] array the way this
+  # rule expects. The underlying .bicep files carry descriptions.
+  Azure.Template.UseDescriptions:
+    - generated-dev/main.json
+    - generated-acc/main.json
+    - generated-prod/main.json
+    - infra/main.json

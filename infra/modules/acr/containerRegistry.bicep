@@ -25,9 +25,9 @@ param vnetId string
 param logAnalyticsWorkspaceId string
 
 // ACR names cannot contain hyphens and must be globally unique
-var acrName = 'acr${customerName}${environment}'
+var acrName = 'acr${take(toLower(customerName), 8)}${environment}${take(uniqueString(resourceGroup().id), 8)}'
 
-resource acr 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = {
+resource acr 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
   name: acrName
   location: location
   tags: tags
@@ -38,10 +38,31 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = {
     adminUserEnabled: false
     publicNetworkAccess: acrSku == 'Premium' ? 'Disabled' : 'Enabled'
     zoneRedundancy: acrSku == 'Premium' && environment == 'prod' ? 'Enabled' : 'Disabled'
+    // Disable artifact export to reduce data exfiltration surface
+    // (satisfies Azure.ACR.ExportPolicy). Only valid on Premium.
+    policies: acrSku == 'Premium' ? {
+      exportPolicy: {
+        status: 'disabled'
+      }
+    } : null
   }
 }
 
-resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+// Geo-replication for prod/acc Premium registries. Cross-region redundancy
+// satisfies Azure.ACR.GeoReplica and keeps image pulls available during a
+// region-level outage. One pair (westeurope, northeurope) for cost control;
+// add more replicas in a separate PR if global reach is needed.
+resource acrGeoReplica 'Microsoft.ContainerRegistry/registries/replications@2025-04-01' = if (acrSku == 'Premium' && (environment == 'prod' || environment == 'acc')) {
+  parent: acr
+  name: 'northeurope'
+  location: 'northeurope'
+  tags: tags
+  properties: {
+    zoneRedundancy: environment == 'prod' ? 'Enabled' : 'Disabled'
+  }
+}
+
+resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
   name: '${acrName}-diag'
   scope: acr
   properties: {

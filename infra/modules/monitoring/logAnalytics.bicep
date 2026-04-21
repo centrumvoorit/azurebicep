@@ -18,7 +18,7 @@ param retentionDays int
 
 var workspaceName = 'log-${customerName}-${environment}'
 
-resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2025-07-01' = {
   name: workspaceName
   location: location
   tags: tags
@@ -27,6 +27,13 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
       name: 'PerGB2018'
     }
     retentionInDays: retentionDays
+    // Enable workspace replication to a secondary region for prod/acc (HA
+    // requirement, satisfies Azure.Log.Replication). Dev stays single-region
+    // to keep costs minimal.
+    replication: environment == 'prod' || environment == 'acc' ? {
+      enabled: true
+      location: 'northeurope'
+    } : null
   }
 }
 

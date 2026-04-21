@@ -28,6 +28,28 @@ var aksNsgName = 'nsg-aks-${customerName}-${environment}'
 var servicesNsgName = 'nsg-services-${customerName}-${environment}'
 var peNsgName = 'nsg-pe-${customerName}-${environment}'
 
+// Outbound management-port deny rule reused across all three NSGs.
+// Satisfies Azure.NSG.LateralTraversal — blocks SSH, RDP, and WinRM to any
+// destination from the subnet, preventing east-west lateral traversal.
+var denyLateralManagement = {
+  name: 'DenyLateralManagement'
+  properties: {
+    priority: 200
+    direction: 'Outbound'
+    access: 'Deny'
+    protocol: '*'
+    sourceAddressPrefix: '*'
+    sourcePortRange: '*'
+    destinationAddressPrefix: '*'
+    destinationPortRanges: [
+      '22'
+      '3389'
+      '5985'
+      '5986'
+    ]
+  }
+}
+
 resource aksNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
   name: aksNsgName
   location: location
@@ -73,6 +95,7 @@ resource aksNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
           destinationPortRange: '*'
         }
       }
+      denyLateralManagement
     ]
   }
 }
@@ -109,6 +132,7 @@ resource servicesNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
           destinationPortRange: '*'
         }
       }
+      denyLateralManagement
     ]
   }
 }
@@ -145,6 +169,7 @@ resource peNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
           destinationPortRange: '*'
         }
       }
+      denyLateralManagement
     ]
   }
 }

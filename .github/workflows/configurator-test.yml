@@ -1,0 +1,121 @@
+name: Configurator Tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/aks-configurator.html'
+      - 'tools/test/**'
+      - '.github/workflows/configurator-test.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/aks-configurator.html'
+      - 'tools/test/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  js-syntax:
+    name: JavaScript Syntax Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Extract <script> block and run node --check
+        run: |
+          awk '/^<script>$/,/^<\/script>$/' tools/aks-configurator.html \
+            | sed '1d;$d' > /tmp/configurator.js
+          node --check /tmp/configurator.js
+          echo "JS_OK"
+
+  generate-and-build:
+    name: Generate + Bicep Build (${{ matrix.environment }})
+    needs: js-syntax
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [dev, acc, prod]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: tools/test/package.json
+
+      - name: Install jsdom
+        working-directory: tools/test
+        run: npm install --no-audit --no-fund
+
+      - name: Generate package from configurator
+        run: |
+          node tools/test/generate-package.mjs \
+            --env ${{ matrix.environment }} \
+            --out generated-${{ matrix.environment }}
+          echo "---files---"
+          find generated-${{ matrix.environment }} -type f | sort
+
+      - name: Bicep Build
+        run: |
+          az bicep install
+          az bicep build --file generated-${{ matrix.environment }}/main.bicep
+
+      - name: Upload generated package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-${{ matrix.environment }}
+          path: generated-${{ matrix.environment }}/
+          retention-days: 7
+
+  ps-rule-generated:
+    name: PSRule for Azure (generated ${{ matrix.environment }})
+    needs: generate-and-build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [dev, acc, prod]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download generated package
+        uses: actions/download-artifact@v4
+        with:
+          name: generated-${{ matrix.environment }}
+          path: generated-${{ matrix.environment }}
+
+      - name: PSRule for Azure
+        uses: microsoft/ps-rule@v2
+        with:
+          modules: PSRule.Rules.Azure
+          # Explicit options file path. Without this, the action auto-discovers
+          # `.ps-rule/ps-rule.yaml` but input.pathIgnore is silently dropped
+          # when `inputPath:` is also set. Pointing directly at the file
+          # restores the expected behaviour.
+          option: .ps-rule/ps-rule.yaml
+          inputPath: generated-${{ matrix.environment }}/
+          outputFormat: Markdown
+          outputPath: psrule-${{ matrix.environment }}.md
+
+      - name: Upload PSRule results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: psrule-${{ matrix.environment }}
+          path: psrule-${{ matrix.environment }}.md
+          retention-days: 7
+
+  # what-if-generated: intentionally not included.
+  # Azure `what-if` requires federated OIDC credentials (AZURE_CLIENT_ID,
+  # AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID) which depend on an Entra app
+  # registration the current repo owner cannot create. If that changes later,
+  # add a job mirroring `validate.yml`'s what-if matrix and reuse the same
+  # three secrets — no new ones needed.

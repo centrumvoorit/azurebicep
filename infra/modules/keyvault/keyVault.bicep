@@ -27,9 +27,9 @@ param logAnalyticsWorkspaceId string
 @description('Azure AD tenant ID')
 param tenantId string
 
-var keyVaultName = 'kv-${customerName}-${environment}'
+var keyVaultName = 'kv-${take(customerName, 6)}-${environment}-${take(uniqueString(resourceGroup().id), 8)}'
 
-resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+resource keyVault 'Microsoft.KeyVault/vaults@2025-05-01' = {
   name: keyVaultName
   location: location
   tags: tags
@@ -51,7 +51,7 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   }
 }
 
-resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
   name: '${keyVaultName}-diag'
   scope: keyVault
   properties: {

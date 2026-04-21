@@ -40,6 +40,53 @@ param userNodeCount int
 @description('User node pool VM size')
 param userNodeVmSize string
 
+@description('System node pool autoscaler lower bound')
+@minValue(1)
+param systemNodeMinCount int
+
+@description('System node pool autoscaler upper bound')
+@minValue(1)
+param systemNodeMaxCount int
+
+@description('User node pool autoscaler lower bound')
+@minValue(1)
+param userNodeMinCount int
+
+@description('User node pool autoscaler upper bound')
+@minValue(1)
+param userNodeMaxCount int
+
+@description('Availability zones for agent pools (empty = regional)')
+param availabilityZones array = []
+
+@description('Authorized IP CIDR ranges for API server (public clusters only)')
+param apiServerAuthorizedIPRanges array = []
+
+@description('AKS SKU tier')
+@allowed(['Free', 'Standard', 'Premium'])
+param skuTier string = 'Standard'
+
+@description('Control-plane auto-upgrade channel')
+@allowed(['none', 'patch', 'stable', 'rapid', 'node-image'])
+param upgradeChannel string = 'patch'
+
+@description('Node OS auto-upgrade channel')
+@allowed(['None', 'Unmanaged', 'SecurityPatch', 'NodeImage'])
+param nodeOSUpgradeChannel string = 'NodeImage'
+
+@description('Node OS disk type')
+@allowed(['Ephemeral', 'Managed'])
+param osDiskType string = 'Ephemeral'
+
+@description('Node OS disk size in GB')
+@minValue(30)
+param osDiskSizeGB int = 30
+
+@description('Max pods per node (AKS hard cap is 250 on Overlay; 110 is Azure default)')
+@minValue(30)
+@maxValue(250)
+param maxPodsPerNode int = 50
+
 @description('Azure AD admin group object IDs for cluster admin access')
 param adminGroupObjectIds array
 
@@ -51,10 +98,14 @@ param serviceCidr string = '10.0.0.0/16'
 
 var aksName = 'aks-${customerName}-${environment}'
 
-resource aksCluster 'Microsoft.ContainerService/managedClusters@2024-09-01' = {
+resource aksCluster 'Microsoft.ContainerService/managedClusters@2025-10-01' = {
   name: aksName
   location: location
   tags: tags
+  sku: {
+    name: 'Base'
+    tier: skuTier
+  }
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
@@ -72,13 +123,26 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2024-09-01' = {
     }
     apiServerAccessProfile: {
       enablePrivateCluster: enablePrivateCluster
+      authorizedIPRanges: apiServerAuthorizedIPRanges
+    }
+    autoUpgradeProfile: {
+      upgradeChannel: upgradeChannel
+      nodeOSUpgradeChannel: nodeOSUpgradeChannel
     }
     networkProfile: {
       networkPlugin: 'azure'
-      networkPolicy: 'azure'
+      networkPluginMode: 'overlay'
+      networkDataplane: 'cilium'
+      networkPolicy: 'cilium'
       serviceCidr: serviceCidr
       dnsServiceIP: dnsServiceIP
-      outboundType: 'loadBalancer'
+      outboundType: 'managedNATGateway'
+      natGatewayProfile: {
+        managedOutboundIPProfile: {
+          count: 1
+        }
+        idleTimeoutInMinutes: 4
+      }
     }
     agentPoolProfiles: [
       {
@@ -87,11 +151,15 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2024-09-01' = {
         count: systemNodeCount
         vmSize: systemNodeVmSize
         osType: 'Linux'
-        osDiskSizeGB: 128
+        osSKU: 'AzureLinux'
+        osDiskType: osDiskType
+        osDiskSizeGB: osDiskSizeGB
+        maxPods: maxPodsPerNode
         vnetSubnetID: aksSubnetId
         enableAutoScaling: true
-        minCount: systemNodeCount
-        maxCount: systemNodeCount + 2
+        minCount: systemNodeMinCount
+        maxCount: systemNodeMaxCount
+        availabilityZones: availabilityZones
         nodeTaints: [
           'CriticalAddonsOnly=true:NoSchedule'
         ]
@@ -102,41 +170,114 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2024-09-01' = {
         count: userNodeCount
         vmSize: userNodeVmSize
         osType: 'Linux'
-        osDiskSizeGB: 128
+        osSKU: 'AzureLinux'
+        osDiskType: osDiskType
+        osDiskSizeGB: osDiskSizeGB
+        maxPods: maxPodsPerNode
         vnetSubnetID: aksSubnetId
         enableAutoScaling: true
-        minCount: userNodeCount
-        maxCount: userNodeCount * 3
+        minCount: userNodeMinCount
+        maxCount: userNodeMaxCount
+        availabilityZones: availabilityZones
       }
     ]
     addonProfiles: {
-      omsagent: {
+      azureKeyvaultSecretsProvider: {
         enabled: true
         config: {
-          logAnalyticsWorkspaceResourceID: logAnalyticsWorkspaceId
+          enableSecretRotation: 'true'
+          rotationPollInterval: '2m'
         }
       }
+      azurepolicy: {
+        enabled: true
+      }
     }
+    azureMonitorProfile: !empty(logAnalyticsWorkspaceId) ? {
+      containerInsights: {
+        enabled: true
+        logAnalyticsWorkspaceResourceId: logAnalyticsWorkspaceId
+      }
+      metrics: {
+        enabled: true
+        kubeStateMetrics: {
+          metricLabelsAllowlist: ''
+          metricAnnotationsAllowList: ''
+        }
+      }
+    } : {}
     oidcIssuerProfile: {
       enabled: true
     }
-    securityProfile: {
+    securityProfile: union({
       workloadIdentity: {
         enabled: true
       }
+      imageCleaner: {
+        enabled: true
+        intervalHours: 24
+      }
+    }, !empty(logAnalyticsWorkspaceId) ? {
+      defender: {
+        logAnalyticsWorkspaceResourceId: logAnalyticsWorkspaceId
+        securityMonitoring: {
+          enabled: true
+        }
+      }
+    } : {})
+    metricsProfile: {
+      costAnalysis: {
+        enabled: skuTier != 'Free'
+      }
     }
     autoScalerProfile: {
-      balanceSimilarNodeGroups: 'true'
-      expander: 'random'
-      maxGracefulTerminationSec: '600'
-      scaleDownDelayAfterAdd: '10m'
-      scaleDownUnneededTime: '10m'
-      scanInterval: '10s'
+      'balance-similar-node-groups': 'true'
+      expander: 'least-waste'
+      'max-graceful-termination-sec': '600'
+      'scale-down-delay-after-add': '10m'
+      'scale-down-unneeded-time': '10m'
+      'scan-interval': '10s'
     }
   }
 }
 
-resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource maintenanceAutoUpgrade 'Microsoft.ContainerService/managedClusters/maintenanceConfigurations@2025-10-01' = {
+  parent: aksCluster
+  name: 'aksManagedAutoUpgradeSchedule'
+  properties: {
+    maintenanceWindow: {
+      schedule: {
+        weekly: {
+          intervalWeeks: 1
+          dayOfWeek: 'Sunday'
+        }
+      }
+      durationHours: 4
+      startTime: '03:00'
+      utcOffset: '+00:00'
+    }
+  }
+}
+
+resource maintenanceNodeOS 'Microsoft.ContainerService/managedClusters/maintenanceConfigurations@2025-10-01' = {
+  parent: aksCluster
+  name: 'aksManagedNodeOSUpgradeSchedule'
+  properties: {
+    maintenanceWindow: {
+      schedule: {
+        weekly: {
+          intervalWeeks: 1
+          dayOfWeek: 'Saturday'
+        }
+      }
+      durationHours: 4
+      startTime: '03:00'
+      utcOffset: '+00:00'
+    }
+  }
+}
+
+resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
   name: '${aksName}-diag'
   scope: aksCluster
   properties: {
@@ -160,3 +301,4 @@ output aksClusterId string = aksCluster.id
 output aksClusterName string = aksCluster.name
 output aksOidcIssuerUrl string = aksCluster.properties.oidcIssuerProfile.issuerURL
 output kubeletIdentityObjectId string = aksCluster.properties.identityProfile.kubeletidentity.objectId
+output nodeResourceGroup string = aksCluster.properties.nodeResourceGroup
