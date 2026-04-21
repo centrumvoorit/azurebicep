@@ -8,7 +8,6 @@ on:
       - 'bicepconfig.json'
 
 permissions:
-  id-token: write
   contents: read
   pull-requests: write
 
@@ -71,50 +70,13 @@ jobs:
               body: output
             });
 
-  what-if:
-    name: What-If (${{ matrix.environment }})
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        environment: [dev, acc, prod]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: What-If
-        id: whatif
-        run: |
-          result=$(az deployment sub what-if \
-            --location westeurope \
-            --template-file infra/main.bicep \
-            --parameters infra/main.${{ matrix.environment }}.bicepparam \
-            --no-pretty-print 2>&1) || true
-          echo "result<<EOF" >> $GITHUB_OUTPUT
-          echo "$result" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Post What-If as PR Comment
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const output = `#### What-If Results for \`${{ matrix.environment }}\`
-
-            \`\`\`
-            ${{ steps.whatif.outputs.result }}
-            \`\`\`
-
-            *Triggered by @${{ github.actor }}*`;
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: output
-            });
+  # NOTE: Azure-auth-dependent jobs removed (2026-04 cleanup).
+  # No Entra app registration available on this tenant, so OIDC federation
+  # cannot be set up and AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID
+  # cannot be populated. Removed:
+  #   - what-if (matrix: dev/acc/prod) — ran `az deployment sub what-if`
+  #   - deploy.yml + deploy-environment.yml — deployed dev→acc→prod on push to main
+  #   - publish-modules.yml — published modules to ACR on tag push
+  # Restore via `git log -- .github/workflows/` when tenant access becomes
+  # available. The three secrets referenced by these workflows are the only
+  # additional configuration needed.
