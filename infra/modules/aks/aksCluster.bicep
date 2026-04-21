@@ -181,7 +181,14 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2025-10-01' = {
         availabilityZones: availabilityZones
       }
     ]
-    addonProfiles: {
+    // Container Insights is still installed via the `omsagent` addon on the
+    // 2025-10-01 API surface — the ARM schema does NOT accept
+    // `azureMonitorProfile.containerInsights` (verified against docs + deploy
+    // response: UnmarshalError on "unknown field containerInsights").
+    // Despite the legacy name, `omsagent` on recent cluster versions is
+    // wired to the AMA agent, not the old MMA. azureMonitorProfile.metrics
+    // is kept for the managed Prometheus path.
+    addonProfiles: union({
       azureKeyvaultSecretsProvider: {
         enabled: true
         config: {
@@ -192,12 +199,15 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2025-10-01' = {
       azurepolicy: {
         enabled: true
       }
-    }
-    azureMonitorProfile: !empty(logAnalyticsWorkspaceId) ? {
-      containerInsights: {
+    }, !empty(logAnalyticsWorkspaceId) ? {
+      omsagent: {
         enabled: true
-        logAnalyticsWorkspaceResourceId: logAnalyticsWorkspaceId
+        config: {
+          logAnalyticsWorkspaceResourceID: logAnalyticsWorkspaceId
+        }
       }
+    } : {})
+    azureMonitorProfile: !empty(logAnalyticsWorkspaceId) ? {
       metrics: {
         enabled: true
         kubeStateMetrics: {
