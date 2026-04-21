@@ -49,7 +49,9 @@ resource acr 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
 }
 
 // Geo-replication for prod/acc Premium registries. Cross-region redundancy
-// satisfies Azure.ACR.GeoReplica. One replica (northeurope) for cost control.
+// satisfies Azure.ACR.GeoReplica and keeps image pulls available during a
+// region-level outage. One pair (westeurope, northeurope) for cost control;
+// add more replicas in a separate PR if global reach is needed.
 resource acrGeoReplica 'Microsoft.ContainerRegistry/registries/replications@2025-04-01' = if (acrSku == 'Premium' && (environment == 'prod' || environment == 'acc')) {
   parent: acr
   name: 'northeurope'

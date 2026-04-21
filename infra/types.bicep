@@ -38,20 +38,56 @@ type aksConfigType = {
   @description('Kubernetes version (e.g., 1.35)')
   kubernetesVersion: string
 
-  @description('System node pool VM count')
+  @description('System node pool VM count (initial; within min/max when autoscaling)')
   systemNodeCount: int
 
   @description('System node pool VM size (e.g., Standard_D2s_v5)')
   systemNodeVmSize: string
 
-  @description('User node pool VM count')
+  @description('System node pool autoscaler lower bound')
+  systemNodeMinCount: int
+
+  @description('System node pool autoscaler upper bound')
+  systemNodeMaxCount: int
+
+  @description('User node pool VM count (initial; within min/max when autoscaling)')
   userNodeCount: int
 
   @description('User node pool VM size (e.g., Standard_D4s_v5)')
   userNodeVmSize: string
 
+  @description('User node pool autoscaler lower bound')
+  userNodeMinCount: int
+
+  @description('User node pool autoscaler upper bound')
+  userNodeMaxCount: int
+
   @description('Enable private AKS cluster (recommended for acc/prod)')
   enablePrivateCluster: bool
+
+  @description('Availability zones for agent pools (e.g., ["1","2","3"]). Empty array = regional placement.')
+  availabilityZones: string[]
+
+  @description('Authorized IP CIDR ranges for the API server (public clusters only). Empty array = allow all.')
+  apiServerAuthorizedIPRanges: string[]
+
+  @description('AKS SKU tier — Free (no SLA, dev only), Standard (uptime SLA), Premium (LTS)')
+  skuTier: 'Free' | 'Standard' | 'Premium'
+
+  @description('Control-plane auto-upgrade channel')
+  upgradeChannel: 'none' | 'patch' | 'stable' | 'rapid' | 'node-image'
+
+  @description('Node OS auto-upgrade channel')
+  nodeOSUpgradeChannel: 'None' | 'Unmanaged' | 'SecurityPatch' | 'NodeImage'
+
+  @description('Node OS disk type — Ephemeral (faster, cheaper, limited by VM cache size) or Managed')
+  osDiskType: 'Ephemeral' | 'Managed'
+
+  @description('Node OS disk size in GB')
+  osDiskSizeGB: int
+
+  @description('Max pods per node (PSRule.Azure.AKS.NodeMinPods wants >= 50 for efficient utilisation; 110 is AKS default with Overlay)')
+  maxPodsPerNode: int
 }
 
 @export()

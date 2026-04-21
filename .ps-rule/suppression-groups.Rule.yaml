@@ -17,8 +17,13 @@ spec:
     - Azure.ACR.GeoReplica
     - Azure.ACR.ExportPolicy
   # PSRule selector expression: `name: '.'` means "this target's name", and
-  # the operator (`startsWith:`) sits at the same level. Previous attempt
-  # nested the operator inside name and failed YAML schema validation.
+  # the operator (`startsWith:`) sits at the same level.
+  # Matches both the configurator test fixture (customerName: 'citest') and
+  # the infra/ reference deployment (customerName: 'contoso') since both
+  # suffix the ACR name with a uniqueString() hash.
   if:
-    name: '.'
-    startsWith: 'acrcitestdev'
+    anyOf:
+      - name: '.'
+        startsWith: 'acrcitestdev'
+      - name: '.'
+        startsWith: 'acrcontosodev'

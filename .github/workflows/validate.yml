@@ -23,15 +23,17 @@ jobs:
         run: az bicep build --file infra/main.bicep
 
       - name: PSRule for Azure
-        # Advisory-only: infra/ has known baseline gaps (sku.tier, imageCleaner,
-        # defender, autoUpgradeProfile, Cilium, NAT Gateway, etc.) that the
-        # configurator addresses in its emitted output. Findings are surfaced
-        # in the PR comment but do not block merge until infra/ is separately
-        # hardened. Align with Checkov's `soft_fail: true` policy.
-        continue-on-error: true
+        # Blocking: infra/ now carries the same Batch B/C hardening the
+        # configurator emits (sku.tier, imageCleaner, defender, autoUpgrade +
+        # maintenance, Cilium + overlay + managedNATGateway, azureMonitorProfile
+        # + DCR, CSI Secret Store, azurepolicy, costAnalysis, AzureLinux, etc.).
+        # Dev-only findings are suppressed in .ps-rule/ps-rule.yaml. If CI turns
+        # red on a genuine hardening regression, fix the finding rather than
+        # re-setting continue-on-error.
         uses: microsoft/ps-rule@v2
         with:
           modules: PSRule.Rules.Azure
+          option: .ps-rule/ps-rule.yaml
           inputPath: infra/
           outputFormat: Markdown
           outputPath: ps-rule-results.md

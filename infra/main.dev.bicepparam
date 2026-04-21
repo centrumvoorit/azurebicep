@@ -28,15 +28,30 @@ param networkConfig = {
 // AKS
 param aksConfig = {
   kubernetesVersion: '1.35'
-  systemNodeCount: 1
+  systemNodeCount: 3
   systemNodeVmSize: 'Standard_D2s_v5'
-  userNodeCount: 1
+  systemNodeMinCount: 3
+  systemNodeMaxCount: 5
+  userNodeCount: 3
   userNodeVmSize: 'Standard_D4s_v5'
+  userNodeMinCount: 3
+  userNodeMaxCount: 5
   enablePrivateCluster: false
+  availabilityZones: []
+  apiServerAuthorizedIPRanges: []
+  // Dev uses Free tier for cost; no SLA by design.
+  skuTier: 'Free'
+  upgradeChannel: 'patch'
+  nodeOSUpgradeChannel: 'NodeImage'
+  osDiskType: 'Ephemeral'
+  osDiskSizeGB: 30
+  maxPodsPerNode: 50
 }
 
 param adminGroupObjectIds = [
-  // Vervang met Azure AD groep Object ID's
+  // REQUIRED: vervang met Azure AD groep Object ID's. Combined with
+  // disableLocalAccounts: true on the cluster, the all-zero placeholder
+  // below causes a silent cluster lockout on deploy.
   '00000000-0000-0000-0000-000000000000'
 ]
 
