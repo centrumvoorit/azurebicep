@@ -25,7 +25,7 @@ param vnetId string
 param logAnalyticsWorkspaceId string
 
 // ACR names cannot contain hyphens and must be globally unique
-var acrName = 'acr${customerName}${environment}'
+var acrName = 'acr${take(toLower(customerName), 8)}${environment}${take(uniqueString(resourceGroup().id), 8)}'
 
 resource acr 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
   name: acrName

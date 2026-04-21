@@ -126,12 +126,12 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2024-09-01' = {
       }
     }
     autoScalerProfile: {
-      balanceSimilarNodeGroups: 'true'
+      'balance-similar-node-groups': 'true'
       expander: 'random'
-      maxGracefulTerminationSec: '600'
-      scaleDownDelayAfterAdd: '10m'
-      scaleDownUnneededTime: '10m'
-      scanInterval: '10s'
+      'max-graceful-termination-sec': '600'
+      'scale-down-delay-after-add': '10m'
+      'scale-down-unneeded-time': '10m'
+      'scan-interval': '10s'
     }
   }
 }

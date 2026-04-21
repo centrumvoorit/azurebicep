@@ -27,7 +27,7 @@ param networkConfig = {
 
 // AKS
 param aksConfig = {
-  kubernetesVersion: '1.30'
+  kubernetesVersion: '1.35'
   systemNodeCount: 1
   systemNodeVmSize: 'Standard_D2s_v5'
   userNodeCount: 1
