@@ -90,6 +90,16 @@ param maxPodsPerNode int = 50
 @description('Azure AD admin group object IDs for cluster admin access')
 param adminGroupObjectIds array
 
+@description('Number of managed outbound public IPs for NAT gateway (each provides ~64k SNAT ports)')
+@minValue(1)
+@maxValue(16)
+param natGatewayOutboundIpCount int = 1
+
+@description('NAT gateway idle timeout in minutes')
+@minValue(4)
+@maxValue(120)
+param natGatewayIdleTimeoutMinutes int = 4
+
 @description('DNS service IP address (must be within serviceCidr)')
 param dnsServiceIP string = '10.0.0.10'
 
@@ -139,9 +149,9 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2025-10-01' = {
       outboundType: 'managedNATGateway'
       natGatewayProfile: {
         managedOutboundIPProfile: {
-          count: 1
+          count: natGatewayOutboundIpCount
         }
-        idleTimeoutInMinutes: 4
+        idleTimeoutInMinutes: natGatewayIdleTimeoutMinutes
       }
     }
     agentPoolProfiles: [
@@ -226,6 +236,9 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2025-10-01' = {
       imageCleaner: {
         enabled: true
         intervalHours: 24
+      }
+      nodeRestriction: {
+        enabled: true
       }
     }, !empty(logAnalyticsWorkspaceId) ? {
       defender: {

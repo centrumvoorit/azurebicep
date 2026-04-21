@@ -88,6 +88,12 @@ type aksConfigType = {
 
   @description('Max pods per node (PSRule.Azure.AKS.NodeMinPods wants >= 50 for efficient utilisation; 110 is AKS default with Overlay)')
   maxPodsPerNode: int
+
+  @description('Number of managed outbound public IPs for NAT gateway (each provides ~64k SNAT ports)')
+  natGatewayOutboundIpCount: int?
+
+  @description('NAT gateway idle timeout in minutes (4–120)')
+  natGatewayIdleTimeoutMinutes: int?
 }
 
 @export()
