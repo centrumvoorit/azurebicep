@@ -9,13 +9,25 @@ configuration:
   # (param file -> main.bicep -> modules) rather than evaluating each module
   # in isolation, which fails because modules have no parameter defaults.
   AZURE_BICEP_PARAMS_FILE_EXPANSION: true
+  # Default is 5s. With the configurator emitting Cilium + NAT Gateway +
+  # conditional union() merges + azureMonitorProfile + maintenanceConfigurations,
+  # main.bicep's symbol resolution occasionally needs longer. 30s gives
+  # headroom without masking real compilation failures.
+  AZURE_BICEP_FILE_EXPANSION_TIMEOUT: 30
 
 input:
-  # Skip standalone module files. Modules are only valid when invoked from
-  # main.bicep with concrete parameters from a .bicepparam file. Scanning
-  # them standalone produces spurious "parameter X was not set" errors.
+  # Skip files that are not valid entry points:
+  # - modules/** — called with params from main.bicep, no defaults of their own
+  # - main.bicep — designed to be reached through main.<env>.bicepparam;
+  #   direct expansion fails because customerName/environment/tags/etc.
+  #   have no defaults. PSRule enters via the .bicepparam file which
+  #   re-uses main.bicep with concrete values.
+  # Glob is evaluated relative to the scanned root (inputPath).
   pathIgnore:
-    - '**/modules/**/*.bicep'
+    - 'modules/**'
+    - '**/modules/**'
+    - 'main.bicep'
+    - '**/main.bicep'
 
 # Suppressions for PSRule.Rules.Azure rules that predate the AKS
 # 2025-10-01 schema. Each rule below is checking a legacy property shape
@@ -72,10 +84,20 @@ suppression:
   Azure.Log.Replication:
     # Workspace replication is enabled for acc/prod only.
     - log-citest-dev
-  Azure.ACR.GeoReplica:
-    # Cross-region replica is created only for Premium + acc/prod.
-    # ACR fixture name uses uniqueString() so glob-match the dev prefix.
-    - acrcitestdev*
+  Azure.AKS.UptimeSLA:
+    # Dev cluster runs with sku.tier: 'Free' for cost control — Free has no
+    # uptime SLA by design. acc/prod use Standard and satisfy the rule.
+    - aks-citest-dev
+  Azure.AKS.AuthorizedIPs:
+    # Test fixture leaves apiServerAuthorizedIPs empty on the public dev
+    # cluster. Real dev deployments should populate the field; the fixture
+    # exists to validate the template shape, not a specific IP allow-list.
+    - aks-citest-dev
+
+  # Azure.ACR.GeoReplica / ExportPolicy suppression cannot list a literal
+  # target name here — the generated ACR uses uniqueString(resourceGroup().id)
+  # so the hash suffix varies per PSRule run. See .ps-rule/suppression-groups.Rule.yaml
+  # for the name-pattern suppression.
 
   # Azure.VNET.PrivateSubnet — the AKS cluster uses outboundType:
   # 'managedNATGateway', which makes Azure auto-provision a NAT gateway in
@@ -87,3 +109,21 @@ suppression:
     - vnet-citest-dev
     - vnet-citest-acc
     - vnet-citest-prod
+
+  # main.bicep is subscription-scoped and contains only module invocations
+  # (Microsoft.Resources/deployments). PSRule's Azure.Template.Resources
+  # rule does not count deployment objects as "resources" and fires a
+  # false positive on every generated main.json. Suppress on the
+  # deterministic test-fixture filename pattern.
+  Azure.Template.Resources:
+    - generated-dev/main.json
+    - generated-acc/main.json
+    - generated-prod/main.json
+
+  # Same reasoning as Azure.Template.Resources — @description on modules
+  # doesn't flow into the compiled ARM /resources[] array the way this
+  # rule expects. The underlying .bicep files carry descriptions.
+  Azure.Template.UseDescriptions:
+    - generated-dev/main.json
+    - generated-acc/main.json
+    - generated-prod/main.json

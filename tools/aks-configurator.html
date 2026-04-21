@@ -20,7 +20,7 @@
       <h1 class="text-2xl font-bold">AKS Configurator</h1>
       <p class="text-blue-200 text-sm">Azure Kubernetes Service deployment wizard</p>
     </div>
-    <span class="bg-blue-600 text-blue-100 text-xs px-3 py-1 rounded-full font-mono">v1.0 | Compatible with azurebicep modules v1.x</span>
+    <span class="bg-blue-600 text-blue-100 text-xs px-3 py-1 rounded-full font-mono">v1.3 | Compatible with azurebicep modules v1.x</span>
   </div>
 </header>
 
@@ -57,7 +57,11 @@
 // CONSTANTS
 // ============================================================
 
-var SCHEMA_VERSION = 1;
+// v2 (tool v1.3): state shape extended with skuTier, nodeOSUpgradeChannel, osDiskType, and
+// osDiskSizeGB default changed from 128/256 to 30 to match the Ephemeral OS disk default.
+// Loading a v1 save triggers the existing version-mismatch banner so users know to re-check
+// their node disk size — 128 GB won't fit in the cache disk on most D-series VMs.
+var SCHEMA_VERSION = 2;
 
 const STEPS = [
   { num: 1, title: 'Cluster Basics' },
@@ -85,7 +89,7 @@ const REGIONS = [
   'uksouth', 'ukwest', 'germanywestcentral', 'swedencentral', 'norwayeast', 'francecentral'
 ];
 
-const K8S_VERSIONS = ['1.29', '1.30', '1.31'];
+const K8S_VERSIONS = ['1.33', '1.34', '1.35'];
 
 const UPGRADE_CHANNELS = ['none', 'patch', 'stable', 'rapid', 'node-image'];
 
@@ -98,7 +102,8 @@ const ENV_DEFAULTS = {
     environment: 'dev',
     location: 'westeurope',
     enablePrivateCluster: false,
-    kubernetesVersion: '1.30',
+    kubernetesVersion: '1.35',
+    skuTier: 'Free',
     vnetAddressPrefix: '10.1.0.0/16',
     aksSubnetPrefix: '10.1.0.0/20',
     servicesSubnetPrefix: '10.1.16.0/24',
@@ -107,18 +112,20 @@ const ENV_DEFAULTS = {
     dnsServiceIP: '10.200.0.10',
     systemNodeVmSize: 'Standard_D2s_v5',
     systemAutoscaling: false,
-    systemNodeCount: 1,
-    systemNodeMinCount: 1,
-    systemNodeMaxCount: 3,
+    systemNodeCount: 3,
+    systemNodeMinCount: 3,
+    systemNodeMaxCount: 5,
     userNodeVmSize: 'Standard_D4s_v5',
     userAutoscaling: false,
-    userNodeCount: 1,
-    userNodeMinCount: 1,
+    userNodeCount: 3,
+    userNodeMinCount: 3,
     userNodeMaxCount: 5,
-    osDiskSizeGB: 128,
+    osDiskType: 'Ephemeral',
+    osDiskSizeGB: 30,
     availabilityZones: [],
     upgradeChannel: 'patch',
-    maxPodsPerNode: 30,
+    nodeOSUpgradeChannel: 'NodeImage',
+    maxPodsPerNode: 50,
     deployAcr: true,
     acrSku: 'Standard',
     deployKeyVault: true,
@@ -133,7 +140,8 @@ const ENV_DEFAULTS = {
     environment: 'acc',
     location: 'westeurope',
     enablePrivateCluster: true,
-    kubernetesVersion: '1.30',
+    kubernetesVersion: '1.35',
+    skuTier: 'Standard',
     vnetAddressPrefix: '10.2.0.0/16',
     aksSubnetPrefix: '10.2.0.0/20',
     servicesSubnetPrefix: '10.2.16.0/24',
@@ -142,18 +150,20 @@ const ENV_DEFAULTS = {
     dnsServiceIP: '10.200.0.10',
     systemNodeVmSize: 'Standard_D2s_v5',
     systemAutoscaling: false,
-    systemNodeCount: 2,
-    systemNodeMinCount: 2,
+    systemNodeCount: 3,
+    systemNodeMinCount: 3,
     systemNodeMaxCount: 5,
     userNodeVmSize: 'Standard_D4s_v5',
     userAutoscaling: false,
-    userNodeCount: 2,
-    userNodeMinCount: 2,
+    userNodeCount: 3,
+    userNodeMinCount: 3,
     userNodeMaxCount: 8,
-    osDiskSizeGB: 128,
+    osDiskType: 'Ephemeral',
+    osDiskSizeGB: 30,
     availabilityZones: ['1', '2', '3'],
     upgradeChannel: 'stable',
-    maxPodsPerNode: 30,
+    nodeOSUpgradeChannel: 'NodeImage',
+    maxPodsPerNode: 50,
     deployAcr: true,
     acrSku: 'Premium',
     deployKeyVault: true,
@@ -168,7 +178,8 @@ const ENV_DEFAULTS = {
     environment: 'prod',
     location: 'westeurope',
     enablePrivateCluster: true,
-    kubernetesVersion: '1.30',
+    kubernetesVersion: '1.35',
+    skuTier: 'Standard',
     vnetAddressPrefix: '10.3.0.0/16',
     aksSubnetPrefix: '10.3.0.0/20',
     servicesSubnetPrefix: '10.3.16.0/24',
@@ -185,9 +196,11 @@ const ENV_DEFAULTS = {
     userNodeCount: 3,
     userNodeMinCount: 3,
     userNodeMaxCount: 12,
-    osDiskSizeGB: 256,
+    osDiskType: 'Ephemeral',
+    osDiskSizeGB: 30,
     availabilityZones: ['1', '2', '3'],
     upgradeChannel: 'stable',
+    nodeOSUpgradeChannel: 'NodeImage',
     maxPodsPerNode: 50,
     deployAcr: true,
     acrSku: 'Premium',
@@ -549,23 +562,59 @@ type networkConfigType = {
 @export()
 @description('AKS cluster configuration')
 type aksConfigType = {
-  @description('Kubernetes version (e.g., 1.30)')
+  @description('Kubernetes version (e.g., 1.35)')
   kubernetesVersion: string
 
-  @description('System node pool VM count')
+  @description('System node pool VM count (initial; within min/max when autoscaling)')
   systemNodeCount: int
 
   @description('System node pool VM size (e.g., Standard_D2s_v5)')
   systemNodeVmSize: string
 
-  @description('User node pool VM count')
+  @description('System node pool autoscaler lower bound')
+  systemNodeMinCount: int
+
+  @description('System node pool autoscaler upper bound')
+  systemNodeMaxCount: int
+
+  @description('User node pool VM count (initial; within min/max when autoscaling)')
   userNodeCount: int
 
   @description('User node pool VM size (e.g., Standard_D4s_v5)')
   userNodeVmSize: string
 
+  @description('User node pool autoscaler lower bound')
+  userNodeMinCount: int
+
+  @description('User node pool autoscaler upper bound')
+  userNodeMaxCount: int
+
   @description('Enable private AKS cluster (recommended for acc/prod)')
   enablePrivateCluster: bool
+
+  @description('Availability zones for agent pools (e.g., ["1","2","3"]). Empty array = regional placement.')
+  availabilityZones: string[]
+
+  @description('Authorized IP CIDR ranges for the API server (public clusters only). Empty array = allow all.')
+  apiServerAuthorizedIPRanges: string[]
+
+  @description('AKS SKU tier — Free (no SLA, dev only), Standard (uptime SLA), Premium (LTS)')
+  skuTier: 'Free' | 'Standard' | 'Premium'
+
+  @description('Control-plane auto-upgrade channel')
+  upgradeChannel: 'none' | 'patch' | 'stable' | 'rapid' | 'node-image'
+
+  @description('Node OS auto-upgrade channel')
+  nodeOSUpgradeChannel: 'None' | 'Unmanaged' | 'SecurityPatch' | 'NodeImage'
+
+  @description('Node OS disk type — Ephemeral (faster, cheaper, limited by VM cache size) or Managed')
+  osDiskType: 'Ephemeral' | 'Managed'
+
+  @description('Node OS disk size in GB')
+  osDiskSizeGB: int
+
+  @description('Max pods per node (PSRule.Azure.AKS.NodeMinPods wants >= 50 for efficient utilisation; 110 is AKS default with Overlay)')
+  maxPodsPerNode: int
 }
 
 @export()
@@ -684,7 +733,7 @@ var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
 // Resource Group
 // ============================================================================
 
-resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
+resource rg 'Microsoft.Resources/resourceGroups@2024-11-01' = {
   name: resourceGroupName
   location: location
   tags: envTags
@@ -766,6 +815,7 @@ module keyVault 'modules/keyvault/keyVault.bicep' = if (features.deployKeyVault)
 module aks 'modules/aks/aksCluster.bicep' = {
   name: 'aks-deployment'
   scope: rg
+  dependsOn: features.deployMonitoring ? [ monitoring ] : []
   params: {
     location: location
     tags: envTags
@@ -778,8 +828,20 @@ module aks 'modules/aks/aksCluster.bicep' = {
     enablePrivateCluster: aksConfig.enablePrivateCluster
     systemNodeCount: aksConfig.systemNodeCount
     systemNodeVmSize: aksConfig.systemNodeVmSize
+    systemNodeMinCount: aksConfig.systemNodeMinCount
+    systemNodeMaxCount: aksConfig.systemNodeMaxCount
     userNodeCount: aksConfig.userNodeCount
     userNodeVmSize: aksConfig.userNodeVmSize
+    userNodeMinCount: aksConfig.userNodeMinCount
+    userNodeMaxCount: aksConfig.userNodeMaxCount
+    availabilityZones: aksConfig.availabilityZones
+    apiServerAuthorizedIPRanges: aksConfig.apiServerAuthorizedIPRanges
+    skuTier: aksConfig.skuTier
+    upgradeChannel: aksConfig.upgradeChannel
+    nodeOSUpgradeChannel: aksConfig.nodeOSUpgradeChannel
+    osDiskType: aksConfig.osDiskType
+    osDiskSizeGB: aksConfig.osDiskSizeGB
+    maxPodsPerNode: aksConfig.maxPodsPerNode
     adminGroupObjectIds: adminGroupObjectIds
   }
 }
@@ -787,6 +849,20 @@ module aks 'modules/aks/aksCluster.bicep' = {
 // ============================================================================
 // Role Assignments
 // ============================================================================
+
+// Container Insights Data Collection Rule (only when monitoring deployed)
+module dcr 'modules/monitoring/dcr.bicep' = if (features.deployMonitoring) {
+  name: 'dcr-deployment'
+  scope: rg
+  params: {
+    location: location
+    tags: envTags
+    customerName: customerName
+    environment: environment
+    logAnalyticsWorkspaceId: features.deployMonitoring ? monitoring.outputs.workspaceId : ''
+    aksClusterName: aks.outputs.aksClusterName
+  }
+}
 
 // AKS kubelet identity -> ACR Pull (only when ACR is deployed)
 module roleAcrPull 'modules/roleAssignment/roleAssignment.bicep' = if (features.deployAcr) {
@@ -886,6 +962,53 @@ param userNodeCount int
 @description('User node pool VM size')
 param userNodeVmSize string
 
+@description('System node pool autoscaler lower bound')
+@minValue(1)
+param systemNodeMinCount int
+
+@description('System node pool autoscaler upper bound')
+@minValue(1)
+param systemNodeMaxCount int
+
+@description('User node pool autoscaler lower bound')
+@minValue(1)
+param userNodeMinCount int
+
+@description('User node pool autoscaler upper bound')
+@minValue(1)
+param userNodeMaxCount int
+
+@description('Availability zones for agent pools (empty = regional)')
+param availabilityZones array = []
+
+@description('Authorized IP CIDR ranges for API server (public clusters only)')
+param apiServerAuthorizedIPRanges array = []
+
+@description('AKS SKU tier')
+@allowed(['Free', 'Standard', 'Premium'])
+param skuTier string = 'Standard'
+
+@description('Control-plane auto-upgrade channel')
+@allowed(['none', 'patch', 'stable', 'rapid', 'node-image'])
+param upgradeChannel string = 'patch'
+
+@description('Node OS auto-upgrade channel')
+@allowed(['None', 'Unmanaged', 'SecurityPatch', 'NodeImage'])
+param nodeOSUpgradeChannel string = 'NodeImage'
+
+@description('Node OS disk type')
+@allowed(['Ephemeral', 'Managed'])
+param osDiskType string = 'Ephemeral'
+
+@description('Node OS disk size in GB')
+@minValue(30)
+param osDiskSizeGB int = 30
+
+@description('Max pods per node (AKS hard cap is 250 on Overlay; 110 is Azure default)')
+@minValue(30)
+@maxValue(250)
+param maxPodsPerNode int = 50
+
 @description('Azure AD admin group object IDs for cluster admin access')
 param adminGroupObjectIds array
 
@@ -897,10 +1020,14 @@ param serviceCidr string = '10.0.0.0/16'
 
 var aksName = 'aks-\${customerName}-\${environment}'
 
-resource aksCluster 'Microsoft.ContainerService/managedClusters@2024-09-01' = {
+resource aksCluster 'Microsoft.ContainerService/managedClusters@2025-10-01' = {
   name: aksName
   location: location
   tags: tags
+  sku: {
+    name: 'Base'
+    tier: skuTier
+  }
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
@@ -918,13 +1045,26 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2024-09-01' = {
     }
     apiServerAccessProfile: {
       enablePrivateCluster: enablePrivateCluster
+      authorizedIPRanges: apiServerAuthorizedIPRanges
+    }
+    autoUpgradeProfile: {
+      upgradeChannel: upgradeChannel
+      nodeOSUpgradeChannel: nodeOSUpgradeChannel
     }
     networkProfile: {
       networkPlugin: 'azure'
-      networkPolicy: 'azure'
+      networkPluginMode: 'overlay'
+      networkDataplane: 'cilium'
+      networkPolicy: 'cilium'
       serviceCidr: serviceCidr
       dnsServiceIP: dnsServiceIP
-      outboundType: 'loadBalancer'
+      outboundType: 'managedNATGateway'
+      natGatewayProfile: {
+        managedOutboundIPProfile: {
+          count: 1
+        }
+        idleTimeoutInMinutes: 4
+      }
     }
     agentPoolProfiles: [
       {
@@ -933,11 +1073,15 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2024-09-01' = {
         count: systemNodeCount
         vmSize: systemNodeVmSize
         osType: 'Linux'
-        osDiskSizeGB: 128
+        osSKU: 'AzureLinux'
+        osDiskType: osDiskType
+        osDiskSizeGB: osDiskSizeGB
+        maxPods: maxPodsPerNode
         vnetSubnetID: aksSubnetId
         enableAutoScaling: true
-        minCount: systemNodeCount
-        maxCount: systemNodeCount + 2
+        minCount: systemNodeMinCount
+        maxCount: systemNodeMaxCount
+        availabilityZones: availabilityZones
         nodeTaints: [
           'CriticalAddonsOnly=true:NoSchedule'
         ]
@@ -948,36 +1092,109 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2024-09-01' = {
         count: userNodeCount
         vmSize: userNodeVmSize
         osType: 'Linux'
-        osDiskSizeGB: 128
+        osSKU: 'AzureLinux'
+        osDiskType: osDiskType
+        osDiskSizeGB: osDiskSizeGB
+        maxPods: maxPodsPerNode
         vnetSubnetID: aksSubnetId
         enableAutoScaling: true
-        minCount: userNodeCount
-        maxCount: userNodeCount * 3
+        minCount: userNodeMinCount
+        maxCount: userNodeMaxCount
+        availabilityZones: availabilityZones
       }
     ]
-    addonProfiles: !empty(logAnalyticsWorkspaceId) ? {
-      omsagent: {
+    addonProfiles: {
+      azureKeyvaultSecretsProvider: {
         enabled: true
         config: {
-          logAnalyticsWorkspaceResourceID: logAnalyticsWorkspaceId
+          enableSecretRotation: 'true'
+          rotationPollInterval: '2m'
+        }
+      }
+      azurepolicy: {
+        enabled: true
+      }
+    }
+    azureMonitorProfile: !empty(logAnalyticsWorkspaceId) ? {
+      containerInsights: {
+        enabled: true
+        logAnalyticsWorkspaceResourceId: logAnalyticsWorkspaceId
+      }
+      metrics: {
+        enabled: true
+        kubeStateMetrics: {
+          metricLabelsAllowlist: ''
+          metricAnnotationsAllowList: ''
         }
       }
     } : {}
     oidcIssuerProfile: {
       enabled: true
     }
-    securityProfile: {
+    securityProfile: union({
       workloadIdentity: {
         enabled: true
       }
+      imageCleaner: {
+        enabled: true
+        intervalHours: 24
+      }
+    }, !empty(logAnalyticsWorkspaceId) ? {
+      defender: {
+        logAnalyticsWorkspaceResourceId: logAnalyticsWorkspaceId
+        securityMonitoring: {
+          enabled: true
+        }
+      }
+    } : {})
+    metricsProfile: {
+      costAnalysis: {
+        enabled: skuTier != 'Free'
+      }
     }
     autoScalerProfile: {
-      balanceSimilarNodeGroups: 'true'
-      expander: 'random'
-      maxGracefulTerminationSec: '600'
-      scaleDownDelayAfterAdd: '10m'
-      scaleDownUnneededTime: '10m'
-      scanInterval: '10s'
+      'balance-similar-node-groups': 'true'
+      expander: 'least-waste'
+      'max-graceful-termination-sec': '600'
+      'scale-down-delay-after-add': '10m'
+      'scale-down-unneeded-time': '10m'
+      'scan-interval': '10s'
+    }
+  }
+}
+
+resource maintenanceAutoUpgrade 'Microsoft.ContainerService/managedClusters/maintenanceConfigurations@2025-10-01' = {
+  parent: aksCluster
+  name: 'aksManagedAutoUpgradeSchedule'
+  properties: {
+    maintenanceWindow: {
+      schedule: {
+        weekly: {
+          intervalWeeks: 1
+          dayOfWeek: 'Sunday'
+        }
+      }
+      durationHours: 4
+      startTime: '03:00'
+      utcOffset: '+00:00'
+    }
+  }
+}
+
+resource maintenanceNodeOS 'Microsoft.ContainerService/managedClusters/maintenanceConfigurations@2025-10-01' = {
+  parent: aksCluster
+  name: 'aksManagedNodeOSUpgradeSchedule'
+  properties: {
+    maintenanceWindow: {
+      schedule: {
+        weekly: {
+          intervalWeeks: 1
+          dayOfWeek: 'Saturday'
+        }
+      }
+      durationHours: 4
+      startTime: '03:00'
+      utcOffset: '+00:00'
     }
   }
 }
@@ -1006,6 +1223,89 @@ output aksClusterId string = aksCluster.id
 output aksClusterName string = aksCluster.name
 output aksOidcIssuerUrl string = aksCluster.properties.oidcIssuerProfile.issuerURL
 output kubeletIdentityObjectId string = aksCluster.properties.identityProfile.kubeletidentity.objectId
+output nodeResourceGroup string = aksCluster.properties.nodeResourceGroup
+`,
+
+  'modules/monitoring/dcr.bicep': `@description('Azure region for all resources')
+param location string
+
+@description('Tags to apply to all resources')
+param tags object
+
+@description('Customer name used in resource naming')
+param customerName string
+
+@description('Environment name (dev, acc, prod)')
+@allowed(['dev', 'acc', 'prod'])
+param environment string
+
+@description('Resource ID of the Log Analytics workspace')
+param logAnalyticsWorkspaceId string
+
+@description('Name of the AKS cluster (for DCR association)')
+param aksClusterName string
+
+var dcrName = 'dcr-\${customerName}-\${environment}-ci'
+
+resource aksExisting 'Microsoft.ContainerService/managedClusters@2025-10-01' existing = {
+  name: aksClusterName
+}
+
+resource dcr 'Microsoft.Insights/dataCollectionRules@2024-03-11' = {
+  name: dcrName
+  location: location
+  tags: tags
+  kind: 'Linux'
+  properties: {
+    dataSources: {
+      extensions: [
+        {
+          name: 'ContainerInsightsExtension'
+          streams: [
+            'Microsoft-ContainerInsights-Group-Default'
+          ]
+          extensionName: 'ContainerInsights'
+          extensionSettings: {
+            dataCollectionSettings: {
+              interval: '1m'
+              namespaceFilteringMode: 'Off'
+              enableContainerLogV2: true
+            }
+          }
+        }
+      ]
+    }
+    destinations: {
+      logAnalytics: [
+        {
+          workspaceResourceId: logAnalyticsWorkspaceId
+          name: 'ciworkspace'
+        }
+      ]
+    }
+    dataFlows: [
+      {
+        streams: [
+          'Microsoft-ContainerInsights-Group-Default'
+        ]
+        destinations: [
+          'ciworkspace'
+        ]
+      }
+    ]
+  }
+}
+
+resource dcrAssociation 'Microsoft.Insights/dataCollectionRuleAssociations@2024-03-11' = {
+  name: 'ci-\${customerName}-\${environment}'
+  scope: aksExisting
+  properties: {
+    dataCollectionRuleId: dcr.id
+    description: 'Container Insights DCR association. Removing this breaks log/metric collection.'
+  }
+}
+
+output dcrId string = dcr.id
 `,
 
   'modules/network/vnet.bicep': `@description('Azure region for all resources')
@@ -1037,6 +1337,28 @@ var vnetName = 'vnet-\${customerName}-\${environment}'
 var aksNsgName = 'nsg-aks-\${customerName}-\${environment}'
 var servicesNsgName = 'nsg-services-\${customerName}-\${environment}'
 var peNsgName = 'nsg-pe-\${customerName}-\${environment}'
+
+// Outbound management-port deny rule reused across all three NSGs.
+// Satisfies Azure.NSG.LateralTraversal — blocks SSH, RDP, and WinRM to any
+// destination from the subnet, preventing east-west lateral traversal.
+var denyLateralManagement = {
+  name: 'DenyLateralManagement'
+  properties: {
+    priority: 200
+    direction: 'Outbound'
+    access: 'Deny'
+    protocol: '*'
+    sourceAddressPrefix: '*'
+    sourcePortRange: '*'
+    destinationAddressPrefix: '*'
+    destinationPortRanges: [
+      '22'
+      '3389'
+      '5985'
+      '5986'
+    ]
+  }
+}
 
 resource aksNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
   name: aksNsgName
@@ -1083,6 +1405,7 @@ resource aksNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
           destinationPortRange: '*'
         }
       }
+      denyLateralManagement
     ]
   }
 }
@@ -1119,6 +1442,7 @@ resource servicesNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
           destinationPortRange: '*'
         }
       }
+      denyLateralManagement
     ]
   }
 }
@@ -1155,6 +1479,7 @@ resource peNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
           destinationPortRange: '*'
         }
       }
+      denyLateralManagement
     ]
   }
 }
@@ -1236,7 +1561,7 @@ param vnetId string
 param logAnalyticsWorkspaceId string
 
 // ACR names cannot contain hyphens and must be globally unique
-var acrName = 'acr\${customerName}\${environment}'
+var acrName = 'acr\${take(toLower(customerName), 8)}\${environment}\${take(uniqueString(resourceGroup().id), 8)}'
 
 resource acr 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
   name: acrName
@@ -1249,6 +1574,27 @@ resource acr 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
     adminUserEnabled: false
     publicNetworkAccess: acrSku == 'Premium' ? 'Disabled' : 'Enabled'
     zoneRedundancy: acrSku == 'Premium' && environment == 'prod' ? 'Enabled' : 'Disabled'
+    // Disable artifact export to reduce data exfiltration surface
+    // (satisfies Azure.ACR.ExportPolicy). Only valid on Premium.
+    policies: acrSku == 'Premium' ? {
+      exportPolicy: {
+        status: 'disabled'
+      }
+    } : null
+  }
+}
+
+// Geo-replication for prod/acc Premium registries. Cross-region redundancy
+// satisfies Azure.ACR.GeoReplica and keeps image pulls available during a
+// region-level outage. One pair (westeurope, northeurope) for cost control;
+// add more replicas in a separate PR if global reach is needed.
+resource acrGeoReplica 'Microsoft.ContainerRegistry/registries/replications@2025-04-01' = if (acrSku == 'Premium' && (environment == 'prod' || environment == 'acc')) {
+  parent: acr
+  name: 'northeurope'
+  location: 'northeurope'
+  tags: tags
+  properties: {
+    zoneRedundancy: environment == 'prod' ? 'Enabled' : 'Disabled'
   }
 }
 
@@ -1320,7 +1666,7 @@ param logAnalyticsWorkspaceId string
 @description('Azure AD tenant ID')
 param tenantId string
 
-var keyVaultName = 'kv-\${customerName}-\${environment}'
+var keyVaultName = 'kv-\${take(customerName, 6)}-\${environment}-\${take(uniqueString(resourceGroup().id), 8)}'
 
 resource keyVault 'Microsoft.KeyVault/vaults@2025-05-01' = {
   name: keyVaultName
@@ -1412,6 +1758,13 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2025-07-01' = {
       name: 'PerGB2018'
     }
     retentionInDays: retentionDays
+    // Enable workspace replication to a secondary region for prod/acc (HA
+    // requirement, satisfies Azure.Log.Replication). Dev stays single-region
+    // to keep costs minimal.
+    replication: environment == 'prod' || environment == 'acc' ? {
+      enabled: true
+      location: 'northeurope'
+    } : null
   }
 }
 
@@ -1549,6 +1902,19 @@ resource roleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 }
 
 output roleAssignmentId string = roleAssignment.id
+`,
+
+  'bicepconfig.json': `{
+  "analyzers": {
+    "core": {
+      "rules": {
+        "use-recent-api-versions": {
+          "level": "warning"
+        }
+      }
+    }
+  }
+}
 `
 };
 
@@ -1564,13 +1930,13 @@ function initState(env) {
   state = {};
   var fields = [
     'customerName', 'environment', 'location', 'enablePrivateCluster', 'kubernetesVersion',
-    'adminGroupObjectIds', 'tagCostCenter', 'tagOwner', 'tagProject', 'customTags',
+    'skuTier', 'adminGroupObjectIds', 'tagCostCenter', 'tagOwner', 'tagProject', 'customTags',
     'additionalRoleAssignments', 'vnetAddressPrefix', 'aksSubnetPrefix', 'servicesSubnetPrefix',
     'privateEndpointSubnetPrefix', 'serviceCidr', 'dnsServiceIP', 'apiServerAuthorizedIPs',
     'systemNodeVmSize', 'systemAutoscaling', 'systemNodeCount', 'systemNodeMinCount',
     'systemNodeMaxCount', 'userNodeVmSize', 'userAutoscaling', 'userNodeCount',
-    'userNodeMinCount', 'userNodeMaxCount', 'osDiskSizeGB', 'availabilityZones',
-    'upgradeChannel', 'maxPodsPerNode', 'deployAcr', 'acrSku', 'deployKeyVault',
+    'userNodeMinCount', 'userNodeMaxCount', 'osDiskType', 'osDiskSizeGB', 'availabilityZones',
+    'upgradeChannel', 'nodeOSUpgradeChannel', 'maxPodsPerNode', 'deployAcr', 'acrSku', 'deployKeyVault',
     'keyVaultSku', 'deployMonitoring', 'logRetentionDays', 'ecosystemTools'
   ];
 
@@ -1738,9 +2104,13 @@ function validateStep(stepNum) {
       result.errors.push('At least one Admin Group Object ID is required.');
     } else {
       var guidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      var placeholderGuid = '00000000-0000-0000-0000-000000000000';
       for (var i = 0; i < nonEmpty.length; i++) {
-        if (!guidRe.test(nonEmpty[i].trim())) {
-          result.errors.push('Admin Group Object ID "' + escapeHtml(nonEmpty[i]) + '" is not a valid GUID (expected format: 00000000-0000-0000-0000-000000000000).');
+        var trimmed = nonEmpty[i].trim();
+        if (!guidRe.test(trimmed)) {
+          result.errors.push('Admin Group Object ID "' + escapeHtml(nonEmpty[i]) + '" is not a valid GUID (expected format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).');
+        } else if (trimmed.toLowerCase() === placeholderGuid) {
+          result.errors.push('Admin Group Object ID "' + placeholderGuid + '" is a placeholder — combined with disableLocalAccounts: true this causes a silent cluster lockout on deploy (ARM succeeds, nobody can log in). Replace with a real Azure AD group Object ID.');
         }
       }
     }
@@ -2257,7 +2627,7 @@ function renderStep1() {
   var env = getVal('environment') || 'dev';
   var loc = getVal('location') || '';
   var isPrivate = getVal('enablePrivateCluster');
-  var k8sVer = getVal('kubernetesVersion') || '1.30';
+  var k8sVer = getVal('kubernetesVersion') || '1.35';
 
   var safeName = name || '{name}';
   var safeNameNoDash = name ? name.replace(/-/g, '') : '{name}';
@@ -2637,8 +3007,8 @@ function renderStep3() {
     (!isPrivate ?
       fieldRow('API Server Authorized IP Ranges',
         renderMultiInput('apiServerAuthorizedIPs', apiIPs, '0.0.0.0/0'),
-        'guide',
-        'Applied post-deploy via az aks update. Only for public clusters. Leave empty to allow all (not recommended for production).') :
+        'params',
+        'Emitted to the AKS cluster as apiServerAccessProfile.authorizedIPRanges. Applies only when the cluster is public. Empty = allow all IPs (not recommended for production).') :
       '') +
 
     '<div class="mt-6">' +
@@ -3129,7 +3499,10 @@ function renderStep7() {
     '<p class="text-xs text-gray-500 mb-3">Azure Resource Manager API versions embedded in the generated Bicep modules.</p>' +
     '<div class="grid grid-cols-2 gap-2">';
   var apiVersions = [
-    { resource: 'AKS Cluster', version: '2024-09-01' },
+    { resource: 'AKS Cluster', version: '2025-10-01' },
+    { resource: 'AKS Maintenance Config', version: '2025-10-01' },
+    { resource: 'Data Collection Rule', version: '2024-03-11' },
+    { resource: 'DCR Association', version: '2024-03-11' },
     { resource: 'VNet / NSGs', version: '2024-05-01' },
     { resource: 'Private Endpoints', version: '2024-05-01' },
     { resource: 'Private DNS Zones', version: '2024-06-01' },
@@ -3139,7 +3512,7 @@ function renderStep7() {
     { resource: 'Managed Identity', version: '2024-11-30' },
     { resource: 'Role Assignments', version: '2022-04-01' },
     { resource: 'Diagnostic Settings', version: '2021-05-01-preview' },
-    { resource: 'Resource Groups', version: '2024-03-01' },
+    { resource: 'Resource Groups', version: '2024-11-01' },
   ];
   for (var avi = 0; avi < apiVersions.length; avi++) {
     var av = apiVersions[avi];
@@ -3317,6 +3690,15 @@ function bicepString(value) {
   return "'" + str + "'";
 }
 
+function bicepStringArray(arr, indent) {
+  var pad = indent || '    ';
+  var list = (arr || [])
+    .filter(function(v) { return v !== null && v !== undefined && String(v).trim() !== ''; })
+    .map(function(v) { return String(v).trim(); });
+  if (list.length === 0) return '[]';
+  return '[\n' + list.map(function(v) { return pad + bicepString(v); }).join('\n') + '\n  ]';
+}
+
 function generateBicepParam(s) {
   var lines = [];
   lines.push("using 'main.bicep'");
@@ -3365,16 +3747,35 @@ function generateBicepParam(s) {
   lines.push('');
 
   // AKS config
-  var systemCount = s.systemAutoscaling ? (s.systemNodeMinCount || 1) : (s.systemNodeCount || 1);
-  var userCount = s.userAutoscaling ? (s.userNodeMinCount || 1) : (s.userNodeCount || 1);
+  var sysMinCount = s.systemNodeMinCount || 1;
+  var sysMaxCount = s.systemNodeMaxCount || Math.max(sysMinCount + 2, 3);
+  var sysStart = s.systemAutoscaling ? sysMinCount : (s.systemNodeCount || 1);
+  var usrMinCount = s.userNodeMinCount || 1;
+  var usrMaxCount = s.userNodeMaxCount || Math.max(usrMinCount * 3, 5);
+  var usrStart = s.userAutoscaling ? usrMinCount : (s.userNodeCount || 1);
+
+  var zones = Array.isArray(s.availabilityZones) ? s.availabilityZones : [];
+  var authIPs = Array.isArray(s.apiServerAuthorizedIPs) ? s.apiServerAuthorizedIPs : [];
 
   lines.push('param aksConfig = {');
-  lines.push('  kubernetesVersion: ' + bicepString(s.kubernetesVersion || '1.30'));
-  lines.push('  systemNodeCount: ' + systemCount);
+  lines.push('  kubernetesVersion: ' + bicepString(s.kubernetesVersion || '1.35'));
+  lines.push('  systemNodeCount: ' + sysStart);
   lines.push('  systemNodeVmSize: ' + bicepString(s.systemNodeVmSize || 'Standard_D4s_v5'));
-  lines.push('  userNodeCount: ' + userCount);
+  lines.push('  systemNodeMinCount: ' + sysMinCount);
+  lines.push('  systemNodeMaxCount: ' + sysMaxCount);
+  lines.push('  userNodeCount: ' + usrStart);
   lines.push('  userNodeVmSize: ' + bicepString(s.userNodeVmSize || 'Standard_D8s_v5'));
+  lines.push('  userNodeMinCount: ' + usrMinCount);
+  lines.push('  userNodeMaxCount: ' + usrMaxCount);
   lines.push('  enablePrivateCluster: ' + (s.enablePrivateCluster ? 'true' : 'false'));
+  lines.push('  availabilityZones: ' + bicepStringArray(zones));
+  lines.push('  apiServerAuthorizedIPRanges: ' + bicepStringArray(authIPs));
+  lines.push('  skuTier: ' + bicepString(s.skuTier || (s.environment === 'dev' ? 'Free' : 'Standard')));
+  lines.push('  upgradeChannel: ' + bicepString(s.upgradeChannel || 'patch'));
+  lines.push('  nodeOSUpgradeChannel: ' + bicepString(s.nodeOSUpgradeChannel || 'NodeImage'));
+  lines.push('  osDiskType: ' + bicepString(s.osDiskType || 'Ephemeral'));
+  lines.push('  osDiskSizeGB: ' + (s.osDiskSizeGB || 30));
+  lines.push('  maxPodsPerNode: ' + (s.maxPodsPerNode || 50));
   lines.push('}');
   lines.push('');
 
@@ -3441,6 +3842,25 @@ function generateDeploymentGuide(s) {
   lines.push('- **Cluster type:** ' + (s.enablePrivateCluster ? 'Private' : 'Public'));
   lines.push('');
 
+  // Breaking-change notice (v1.3 defaults)
+  lines.push('## Important: Cluster Recreation Required for Existing Deployments');
+  lines.push('');
+  lines.push('This generated Bicep uses Cilium dataplane (Azure CNI Overlay) and managed NAT Gateway outbound.');
+  lines.push('These are **create-time** properties on AKS — you cannot switch an existing cluster to them via `az aks update`.');
+  lines.push('If you are re-deploying over an existing cluster that used Azure CNI classic + Load Balancer outbound, the deployment will fail.');
+  lines.push('');
+  lines.push('Options:');
+  lines.push('- **New cluster:** deploy as-is, you get Cilium + NAT Gateway out of the box.');
+  lines.push('- **Existing cluster:** either delete first (blue/green), or edit `modules/aks/aksCluster.bicep` to match your current network profile before running.');
+  lines.push('');
+  lines.push('Legacy properties to restore for compatibility:');
+  lines.push("- `networkPluginMode: 'overlay'` → remove");
+  lines.push("- `networkDataplane: 'cilium'` → remove");
+  lines.push("- `networkPolicy: 'cilium'` → `'azure'`");
+  lines.push("- `outboundType: 'managedNATGateway'` → `'loadBalancer'`");
+  lines.push('- remove the `natGatewayProfile` block');
+  lines.push('');
+
   // Prerequisites
   lines.push('## Prerequisites');
   lines.push('');
@@ -3472,7 +3892,8 @@ function generateDeploymentGuide(s) {
   lines.push('```');
   lines.push('');
 
-  // Authorized IPs for public cluster
+  // Authorized IPs — emitted to Bicep (apiServerAccessProfile.authorizedIPRanges).
+  // Surface a reference note for updating ranges post-deploy without a redeploy.
   var authIPs = s.apiServerAuthorizedIPs || [];
   var validIPs = [];
   for (var i = 0; i < authIPs.length; i++) {
@@ -3480,7 +3901,11 @@ function generateDeploymentGuide(s) {
     if (ip) validIPs.push(ip);
   }
   if (!s.enablePrivateCluster && validIPs.length > 0) {
-    lines.push('## Configure Authorized IP Ranges');
+    lines.push('## API Server Authorized IP Ranges');
+    lines.push('');
+    lines.push('Configured via Bicep (apiServerAccessProfile.authorizedIPRanges): ' + validIPs.join(', '));
+    lines.push('');
+    lines.push('To add or rotate ranges without a redeploy:');
     lines.push('');
     lines.push('```bash');
     lines.push('az aks update \\');
@@ -3841,6 +4266,20 @@ function loadConfig() {
 // ============================================================
 // INIT
 // ============================================================
+
+// Test hook: exposes the const-scoped constants + selected functions for
+// headless CI. Browsers don't attach `const` declarations to `window`, so
+// this is the explicit bridge used by tools/test/generate-package.mjs.
+// Assigned BEFORE init() runs so it is available even if DOM rendering
+// throws under jsdom. Safe to expose — everything is already in view-source.
+window.__TEST__ = {
+  ENV_DEFAULTS: ENV_DEFAULTS,
+  BICEP_TEMPLATES: BICEP_TEMPLATES,
+  VM_SIZES: VM_SIZES,
+  generateBicepParam: generateBicepParam,
+  generateDeploymentGuide: generateDeploymentGuide,
+  SCHEMA_VERSION: SCHEMA_VERSION
+};
 
 (function init() {
   if (!autoRestore()) {
