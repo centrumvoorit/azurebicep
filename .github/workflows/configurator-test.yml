@@ -14,7 +14,6 @@ on:
       - 'tools/test/**'
 
 permissions:
-  id-token: write
   contents: read
   pull-requests: write
 
@@ -109,66 +108,9 @@ jobs:
           path: psrule-${{ matrix.environment }}.md
           retention-days: 7
 
-  what-if-generated:
-    name: What-If on Generated Package (${{ matrix.environment }})
-    needs: generate-and-build
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        environment: [dev, acc, prod]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download generated package
-        uses: actions/download-artifact@v4
-        with:
-          name: generated-${{ matrix.environment }}
-          path: generated-${{ matrix.environment }}
-
-      - name: Azure Login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: What-If
-        id: whatif
-        run: |
-          result=$(az deployment sub what-if \
-            --location westeurope \
-            --template-file generated-${{ matrix.environment }}/main.bicep \
-            --parameters generated-${{ matrix.environment }}/main.${{ matrix.environment }}.bicepparam \
-            --no-pretty-print 2>&1) || true
-          {
-            echo "result<<WHATIF_EOF"
-            echo "$result"
-            echo "WHATIF_EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Post What-If as PR Comment
-        if: github.event.pull_request != null
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const output = `#### Configurator What-If Results for \`${{ matrix.environment }}\`
-
-            <details>
-            <summary>az deployment sub what-if output</summary>
-
-            \`\`\`
-            ${{ steps.whatif.outputs.result }}
-            \`\`\`
-
-            </details>
-
-            *Test fixture: customerName=citest, real-GUID admin group. Triggered by @${{ github.actor }}*`;
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: output
-            });
+  # what-if-generated: intentionally not included.
+  # Azure `what-if` requires federated OIDC credentials (AZURE_CLIENT_ID,
+  # AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID) which depend on an Entra app
+  # registration the current repo owner cannot create. If that changes later,
+  # add a job mirroring `validate.yml`'s what-if matrix and reuse the same
+  # three secrets — no new ones needed.
