@@ -4189,6 +4189,20 @@ function loadConfig() {
 // INIT
 // ============================================================
 
+// Test hook: exposes the const-scoped constants + selected functions for
+// headless CI. Browsers don't attach `const` declarations to `window`, so
+// this is the explicit bridge used by tools/test/generate-package.mjs.
+// Assigned BEFORE init() runs so it is available even if DOM rendering
+// throws under jsdom. Safe to expose — everything is already in view-source.
+window.__TEST__ = {
+  ENV_DEFAULTS: ENV_DEFAULTS,
+  BICEP_TEMPLATES: BICEP_TEMPLATES,
+  VM_SIZES: VM_SIZES,
+  generateBicepParam: generateBicepParam,
+  generateDeploymentGuide: generateDeploymentGuide,
+  SCHEMA_VERSION: SCHEMA_VERSION
+};
+
 (function init() {
   if (!autoRestore()) {
     initState('dev');

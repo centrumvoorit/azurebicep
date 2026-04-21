@@ -1,1 +1,9 @@
 .env
+
+# Editor / tooling (local, per-machine)
+.vscode/
+.claude/
+
+# Node dependencies for the configurator test harness (installed in CI)
+tools/test/node_modules/
+tools/test/package-lock.json
