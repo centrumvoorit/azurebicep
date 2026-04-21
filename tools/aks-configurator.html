@@ -20,7 +20,7 @@
       <h1 class="text-2xl font-bold">AKS Configurator</h1>
       <p class="text-blue-200 text-sm">Azure Kubernetes Service deployment wizard</p>
     </div>
-    <span class="bg-blue-600 text-blue-100 text-xs px-3 py-1 rounded-full font-mono">v1.4 | Compatible with azurebicep modules v1.x</span>
+    <span class="bg-blue-600 text-blue-100 text-xs px-3 py-1 rounded-full font-mono">v1.5 | Compatible with azurebicep modules v1.x</span>
   </div>
 </header>
 
@@ -615,6 +615,12 @@ type aksConfigType = {
 
   @description('Max pods per node (PSRule.Azure.AKS.NodeMinPods wants >= 50 for efficient utilisation; 110 is AKS default with Overlay)')
   maxPodsPerNode: int
+
+  @description('Number of managed outbound public IPs for NAT gateway (each provides ~64k SNAT ports)')
+  natGatewayOutboundIpCount: int?
+
+  @description('NAT gateway idle timeout in minutes (4–120)')
+  natGatewayIdleTimeoutMinutes: int?
 }
 
 @export()
@@ -778,6 +784,7 @@ module monitoring 'modules/monitoring/logAnalytics.bicep' = if (features.deployM
     customerName: customerName
     environment: environment
     retentionDays: logRetentionDays
+    dailyQuotaGb: environment == 'dev' ? 1 : -1
   }
 }
 
@@ -843,6 +850,8 @@ module aks 'modules/aks/aksCluster.bicep' = {
     osDiskSizeGB: aksConfig.osDiskSizeGB
     maxPodsPerNode: aksConfig.maxPodsPerNode
     adminGroupObjectIds: adminGroupObjectIds
+    natGatewayOutboundIpCount: aksConfig.?natGatewayOutboundIpCount ?? 1
+    natGatewayIdleTimeoutMinutes: aksConfig.?natGatewayIdleTimeoutMinutes ?? 4
   }
 }
 
@@ -1012,6 +1021,16 @@ param maxPodsPerNode int = 50
 @description('Azure AD admin group object IDs for cluster admin access')
 param adminGroupObjectIds array
 
+@description('Number of managed outbound public IPs for NAT gateway (each provides ~64k SNAT ports)')
+@minValue(1)
+@maxValue(16)
+param natGatewayOutboundIpCount int = 1
+
+@description('NAT gateway idle timeout in minutes')
+@minValue(4)
+@maxValue(120)
+param natGatewayIdleTimeoutMinutes int = 4
+
 @description('DNS service IP address (must be within serviceCidr)')
 param dnsServiceIP string = '10.0.0.10'
 
@@ -1061,9 +1080,9 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2025-10-01' = {
       outboundType: 'managedNATGateway'
       natGatewayProfile: {
         managedOutboundIPProfile: {
-          count: 1
+          count: natGatewayOutboundIpCount
         }
-        idleTimeoutInMinutes: 4
+        idleTimeoutInMinutes: natGatewayIdleTimeoutMinutes
       }
     }
     agentPoolProfiles: [
@@ -1148,6 +1167,9 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2025-10-01' = {
       imageCleaner: {
         enabled: true
         intervalHours: 24
+      }
+      nodeRestriction: {
+        enabled: true
       }
     }, !empty(logAnalyticsWorkspaceId) ? {
       defender: {
@@ -1370,7 +1392,7 @@ var denyLateralManagement = {
   }
 }
 
-resource aksNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
+resource aksNsg 'Microsoft.Network/networkSecurityGroups@2024-07-01' = {
   name: aksNsgName
   location: location
   tags: tags
@@ -1420,7 +1442,7 @@ resource aksNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
   }
 }
 
-resource servicesNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
+resource servicesNsg 'Microsoft.Network/networkSecurityGroups@2024-07-01' = {
   name: servicesNsgName
   location: location
   tags: tags
@@ -1457,7 +1479,7 @@ resource servicesNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
   }
 }
 
-resource peNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
+resource peNsg 'Microsoft.Network/networkSecurityGroups@2024-07-01' = {
   name: peNsgName
   location: location
   tags: tags
@@ -1494,7 +1516,7 @@ resource peNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
   }
 }
 
-resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
+resource vnet 'Microsoft.Network/virtualNetworks@2024-07-01' = {
   name: vnetName
   location: location
   tags: tags
@@ -1757,6 +1779,9 @@ param environment string
 @maxValue(730)
 param retentionDays int
 
+@description('Daily ingestion cap in GB (-1 = unlimited). Set a cap on dev to avoid runaway costs.')
+param dailyQuotaGb int = -1
+
 var workspaceName = 'log-\${customerName}-\${environment}'
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2025-07-01' = {
@@ -1768,6 +1793,9 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2025-07-01' = {
       name: 'PerGB2018'
     }
     retentionInDays: retentionDays
+    workspaceCapping: dailyQuotaGb > 0 ? {
+      dailyQuotaGb: dailyQuotaGb
+    } : null
     // Enable workspace replication to a secondary region for prod/acc (HA
     // requirement, satisfies Azure.Log.Replication). Dev stays single-region
     // to keep costs minimal.
@@ -1851,7 +1879,7 @@ resource vnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06
   }
 }
 
-resource privateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = {
+resource privateEndpoint 'Microsoft.Network/privateEndpoints@2024-07-01' = {
   name: name
   location: location
   tags: tags
@@ -1871,7 +1899,7 @@ resource privateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   }
 }
 
-resource dnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = {
+resource dnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-07-01' = {
   parent: privateEndpoint
   name: 'default'
   properties: {
@@ -2972,7 +3000,7 @@ function renderStep3() {
   return '<h2 class="text-xl font-bold text-gray-800 mb-1">Step 3: Networking</h2>' +
     '<p class="text-sm text-gray-500 mb-6">Configure VNet, subnets, and cluster networking parameters.</p>' +
 
-    infoPanel('Network plugin: Azure CNI. Network policy: Azure. Outbound: Load Balancer. These are hardcoded in the current Bicep modules.') +
+    infoPanel('Network plugin: Azure CNI Overlay (Cilium dataplane). Network policy: Cilium. Outbound: managed NAT Gateway. These are hardcoded in the Bicep modules.') +
     '<div class="mb-6"></div>' +
 
     fieldRow('VNet Address Prefix',
@@ -3513,8 +3541,8 @@ function renderStep7() {
     { resource: 'AKS Maintenance Config', version: '2025-10-01' },
     { resource: 'Data Collection Rule', version: '2024-03-11' },
     { resource: 'DCR Association', version: '2024-03-11' },
-    { resource: 'VNet / NSGs', version: '2024-05-01' },
-    { resource: 'Private Endpoints', version: '2024-05-01' },
+    { resource: 'VNet / NSGs', version: '2024-07-01' },
+    { resource: 'Private Endpoints', version: '2024-07-01' },
     { resource: 'Private DNS Zones', version: '2024-06-01' },
     { resource: 'Container Registry', version: '2025-04-01' },
     { resource: 'Key Vault', version: '2025-05-01' },
@@ -3786,6 +3814,9 @@ function generateBicepParam(s) {
   lines.push('  osDiskType: ' + bicepString(s.osDiskType || 'Ephemeral'));
   lines.push('  osDiskSizeGB: ' + (s.osDiskSizeGB || 30));
   lines.push('  maxPodsPerNode: ' + (s.maxPodsPerNode || 50));
+  if (s.environment === 'prod' || s.environment === 'acc') {
+    lines.push('  natGatewayOutboundIpCount: 2');
+  }
   lines.push('}');
   lines.push('');
 
