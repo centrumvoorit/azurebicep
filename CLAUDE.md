@@ -24,7 +24,7 @@ The two paths are kept in sync by CI — any drift between `infra/modules/**` an
 - **Types first:** any new AKS config knob must land as a field in `types.bicep → aksConfigType` before it's referenced anywhere else. Untyped `object` params are a code smell here.
 - **Feature flags:** optional building blocks gate on `features.deployAcr` / `deployKeyVault` / `deployMonitoring`. If adding a new resource family, add a flag rather than making it unconditional.
 - **Customer name:** stays `'contoso'` in the reference repo. The configurator's test fixture uses `'citest'`. PSRule suppressions list both prefixes (see `.ps-rule/ps-rule.yaml`).
-- **API versions:** AKS is on `2025-10-01`. DCR + DCR association on `2024-03-11`. `diagnosticSettings@2021-05-01-preview` is kept and the `use-recent-api-versions` lint rule is downgraded to warning in `infra/bicepconfig.json` because the only stable alternative (`2016-09-01`) predates `categoryGroup: 'allLogs'`.
+- **API versions:** AKS is on `2026-01-01`. Network types on `2025-05-01`. ACR on `2025-11-01`. DCR + DCR association on `2024-03-11`. `diagnosticSettings@2021-05-01-preview` is kept with `#disable-next-line use-recent-api-versions` because the only stable alternative (`2016-09-01`) predates `categoryGroup: 'allLogs'`.
 
 ## CI map
 
