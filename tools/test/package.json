@@ -4,7 +4,8 @@
   "type": "module",
   "description": "CI harness that loads aks-configurator.html in jsdom, invokes generateBicepParam + extracts BICEP_TEMPLATES, so az bicep build can validate the emitted package.",
   "scripts": {
-    "generate": "node generate-package.mjs"
+    "generate": "node generate-package.mjs",
+    "test": "node behavior-tests.mjs"
   },
   "dependencies": {
     "jsdom": "^24.1.0"
