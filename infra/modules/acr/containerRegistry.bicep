@@ -62,6 +62,7 @@ resource acrGeoReplica 'Microsoft.ContainerRegistry/registries/replications@2025
   }
 }
 
+#disable-next-line use-recent-api-versions
 resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
   name: '${acrName}-diag'
   scope: acr
