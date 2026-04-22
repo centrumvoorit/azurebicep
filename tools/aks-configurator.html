@@ -299,16 +299,20 @@ const ECOSYSTEM_TOOLS = {
           return vcpu < 2 ? ['Requires at least 2 vCPU on user nodes'] : [];
         },
         conflicts: ['istio'],
+        manualOnly: true,
         guidance: {
           helmRepo: 'https://helm.linkerd.io/stable',
           chart: 'linkerd-control-plane',
           namespace: 'linkerd',
           commands: [
             'curl -sL https://run.linkerd.io/install | sh',
+            'export PATH=$HOME/.linkerd2/bin:$PATH',
+            'linkerd check --pre',
+            'linkerd install --crds | kubectl apply -f -',
             'linkerd install | kubectl apply -f -'
           ],
           verifyCmd: 'linkerd check',
-          note: 'Cannot be combined with Istio.'
+          note: 'Cannot be combined with Istio. Requires the Linkerd CLI on PATH and a preflight check before installing CRDs and control plane.'
         }
       }
     ]
@@ -4512,6 +4516,23 @@ function generatePostDeployScript(s) {
   lines.push('DEPLOY_NAME="' + deployName + '"');
   lines.push('');
 
+  // Check if any automatable tool needs Helm
+  var postNeedsHelm = false;
+  for (var hi = 0; hi < selectedTools.length; hi++) {
+    if (selectedTools[hi].deployType === 'Helm install') {
+      postNeedsHelm = true;
+      break;
+    }
+  }
+  if (postNeedsHelm) {
+    lines.push('# Pre-check: Helm required');
+    lines.push('if ! command -v helm &>/dev/null; then');
+    lines.push('  echo "ERROR: helm is not installed. Install from https://helm.sh/docs/intro/install/"');
+    lines.push('  exit 1');
+    lines.push('fi');
+    lines.push('');
+  }
+
   // Step 1: Poll deployment status
   lines.push('# -------------------------------------------------------');
   lines.push('# Step 1: Wait for deployment to succeed');
@@ -4674,6 +4695,25 @@ function generateDeploymentGuide(s) {
   lines.push('- Bicep CLI installed (`az bicep version`)');
   lines.push('- Sufficient permissions to create resources at subscription scope');
   lines.push('- `kubectl` installed for cluster management');
+
+  // Check if any selected ecosystem tool uses Helm
+  var guideTools = s.ecosystemTools || {};
+  var guideNeedsHelm = false;
+  var guideCatKeys = Object.keys(ECOSYSTEM_TOOLS);
+  for (var gci = 0; gci < guideCatKeys.length; gci++) {
+    var gcTools = ECOSYSTEM_TOOLS[guideCatKeys[gci]].tools;
+    for (var gti = 0; gti < gcTools.length; gti++) {
+      if (guideTools[gcTools[gti].id] && gcTools[gti].deployType === 'Helm install') {
+        guideNeedsHelm = true;
+        break;
+      }
+    }
+    if (guideNeedsHelm) break;
+  }
+  if (guideNeedsHelm) {
+    lines.push('- Helm 3 installed (`helm version`) — required for selected ecosystem tools');
+  }
+
   if (s.enablePrivateCluster) {
     lines.push('- VPN or private network access to the VNet (private cluster)');
   }
@@ -4772,22 +4812,37 @@ function generateDeploymentGuide(s) {
   }
 
   // Ecosystem tools
+  var bicepNativeIds = { 'azure-monitor': 1, 'azure-policy': 1, 'csi-secret-store': 1 };
   var tools = s.ecosystemTools || {};
   var catKeys = Object.keys(ECOSYSTEM_TOOLS);
   var hasToolSection = false;
+  var hasBicepNativeSection = false;
+  var bicepNativeNames = [];
   for (var ci = 0; ci < catKeys.length; ci++) {
     var catTools = ECOSYSTEM_TOOLS[catKeys[ci]].tools;
     for (var ti = 0; ti < catTools.length; ti++) {
       var tool = catTools[ti];
       if (!tools[tool.id]) continue;
+
+      // Bicep-native tools: collect names, don't emit install commands
+      if (bicepNativeIds[tool.id]) {
+        bicepNativeNames.push(tool.label);
+        continue;
+      }
+
       if (!hasToolSection) {
         lines.push('## Ecosystem Tools');
         lines.push('');
+        var guidePostDeployCheck = generatePostDeployScript(s);
+        if (guidePostDeployCheck) {
+          lines.push('Run `post-deploy-tools.sh` after deployment to install automatable tools. Tools marked *manual* require editing before running.');
+          lines.push('');
+        }
         hasToolSection = true;
       }
       var g = tool.guidance;
 
-      lines.push('### ' + tool.label);
+      lines.push('### ' + tool.label + (tool.manualOnly ? ' *(manual)*' : ''));
       lines.push('');
       lines.push(tool.description);
       lines.push('');
@@ -4820,10 +4875,21 @@ function generateDeploymentGuide(s) {
         lines.push('> ' + g.note);
         lines.push('');
       }
-
-      lines.push('*Starter commands -- review values for production use.*');
+    }
+  }
+  if (bicepNativeNames.length > 0) {
+    if (!hasToolSection) {
+      lines.push('## Ecosystem Tools');
       lines.push('');
     }
+    lines.push('### Already deployed via Bicep');
+    lines.push('');
+    lines.push('The following are enabled in the Bicep template and deploy automatically with the cluster — no post-deploy action needed:');
+    lines.push('');
+    for (var bni = 0; bni < bicepNativeNames.length; bni++) {
+      lines.push('- ' + bicepNativeNames[bni]);
+    }
+    lines.push('');
   }
 
   // Validation checklist

@@ -479,6 +479,103 @@ console.log('19. Deploy script always uses --no-wait');
 }
 
 // ----------------------------------------------------------
+// 20. Linkerd is manualOnly
+// ----------------------------------------------------------
+console.log('20. Linkerd is manualOnly');
+{
+  const dom = createDom();
+  const T = dom.window.__TEST__;
+
+  const script = T.generatePostDeployScript({
+    customerName: 'testco', environment: 'dev', location: 'westeurope',
+    ecosystemTools: { linkerd: true, nginx: true },
+  });
+  const execLines = script.split('\n').filter(l => !l.startsWith('echo ') && !l.startsWith('#'));
+  const execBlock = execLines.join('\n');
+  assert(!execBlock.includes('linkerd install'), 'Post-deploy should NOT execute linkerd install');
+  assert(script.includes('Linkerd'), 'Post-deploy should mention Linkerd as manual');
+
+  dom.window.close();
+}
+
+// ----------------------------------------------------------
+// 21. Helm prerequisite check in post-deploy script
+// ----------------------------------------------------------
+console.log('21. Helm prerequisite check in post-deploy script');
+{
+  const dom = createDom();
+  const T = dom.window.__TEST__;
+
+  // nginx uses Helm
+  const s1 = T.generatePostDeployScript({
+    customerName: 'testco', environment: 'dev', location: 'westeurope',
+    ecosystemTools: { nginx: true },
+  });
+  assert(s1.includes('command -v helm'), 'Post-deploy with Helm tools should check for helm');
+
+  // keda is AKS add-on (no Helm)
+  const s2 = T.generatePostDeployScript({
+    customerName: 'testco', environment: 'dev', location: 'westeurope',
+    ecosystemTools: { keda: true },
+  });
+  assert(!s2.includes('command -v helm'), 'Post-deploy with only AKS add-ons should not check for helm');
+
+  dom.window.close();
+}
+
+// ----------------------------------------------------------
+// 22. Helm listed in deployment guide prerequisites when needed
+// ----------------------------------------------------------
+console.log('22. Helm in deployment guide prerequisites');
+{
+  const dom = createDom();
+  const T = dom.window.__TEST__;
+
+  const g1 = T.generateDeploymentGuide({
+    customerName: 'testco', environment: 'dev', location: 'westeurope',
+    ecosystemTools: { nginx: true },
+  });
+  assert(g1.includes('Helm 3 installed'), 'Guide should list Helm when Helm tools selected');
+
+  const g2 = T.generateDeploymentGuide({
+    customerName: 'testco', environment: 'dev', location: 'westeurope',
+    ecosystemTools: {},
+  });
+  assert(!g2.includes('Helm'), 'Guide should NOT list Helm when no tools selected');
+
+  dom.window.close();
+}
+
+// ----------------------------------------------------------
+// 23. Bicep-native tools excluded from guide install commands
+// ----------------------------------------------------------
+console.log('23. Bicep-native tools excluded from guide install commands');
+{
+  const dom = createDom();
+  const T = dom.window.__TEST__;
+
+  const guide = T.generateDeploymentGuide({
+    customerName: 'testco', environment: 'dev', location: 'westeurope',
+    deployMonitoring: true,
+    ecosystemTools: { 'azure-monitor': true, 'azure-policy': true, 'csi-secret-store': true, nginx: true },
+  });
+
+  // Should NOT have fenced install commands for Bicep-native tools
+  assert(!guide.includes('az aks enable-addons -g testco-dev -n testco-dev --addons azure-policy'), 'Guide should NOT show azure-policy install command');
+  assert(!guide.includes('az aks enable-addons -g testco-dev -n testco-dev --addons azure-keyvault'), 'Guide should NOT show CSI install command');
+
+  // Should have a "deployed via Bicep" note
+  assert(guide.includes('Already deployed via Bicep'), 'Guide should have Bicep-native section');
+  assert(guide.includes('Azure Monitor'), 'Guide should list Azure Monitor as Bicep-native');
+  assert(guide.includes('Azure Policy'), 'Guide should list Azure Policy as Bicep-native');
+
+  // nginx should still be shown
+  assert(guide.includes('NGINX'), 'Guide should still show nginx install commands');
+
+  dom.window.close();
+}
+
+// ----------------------------------------------------------
 // Summary
 // ----------------------------------------------------------
 console.log('\n' + '='.repeat(50));
