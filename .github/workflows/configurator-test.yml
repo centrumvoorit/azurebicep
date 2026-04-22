@@ -50,9 +50,13 @@ jobs:
           cache: 'npm'
           cache-dependency-path: tools/test/package.json
 
-      - name: Install jsdom
+      - name: Install dependencies
         working-directory: tools/test
         run: npm install --no-audit --no-fund
+
+      - name: Run behavior tests
+        working-directory: tools/test
+        run: npm test
 
       - name: Generate package from configurator
         run: |

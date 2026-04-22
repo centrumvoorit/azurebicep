@@ -97,6 +97,8 @@ const REGIONS = [
   'uksouth', 'ukwest', 'germanywestcentral', 'swedencentral', 'norwayeast', 'francecentral'
 ];
 
+const REGIONS_WITHOUT_ZONES = ['ukwest'];
+
 const K8S_VERSIONS = ['1.33', '1.34', '1.35'];
 
 const UPGRADE_CHANNELS = ['none', 'patch', 'stable', 'rapid', 'node-image'];
@@ -291,22 +293,24 @@ const ECOSYSTEM_TOOLS = {
         id: 'linkerd',
         label: 'Linkerd',
         description: 'Lightweight, ultrafast service mesh focused on simplicity and performance.',
-        deployType: 'Helm install',
+        deployType: 'CLI install',
         requirements: function(state) {
           var vcpu = getVmVcpu(state.userNodeVmSize ? state.userNodeVmSize.value : 'Standard_D4s_v5');
           return vcpu < 2 ? ['Requires at least 2 vCPU on user nodes'] : [];
         },
         conflicts: ['istio'],
+        manualOnly: true,
         guidance: {
-          helmRepo: 'https://helm.linkerd.io/stable',
-          chart: 'linkerd-control-plane',
           namespace: 'linkerd',
           commands: [
             'curl -sL https://run.linkerd.io/install | sh',
+            'export PATH=$HOME/.linkerd2/bin:$PATH',
+            'linkerd check --pre',
+            'linkerd install --crds | kubectl apply -f -',
             'linkerd install | kubectl apply -f -'
           ],
           verifyCmd: 'linkerd check',
-          note: 'Cannot be combined with Istio.'
+          note: 'Cannot be combined with Istio. Requires the Linkerd CLI on PATH and a preflight check before installing CRDs and control plane.'
         }
       }
     ]
@@ -338,10 +342,11 @@ const ECOSYSTEM_TOOLS = {
         description: 'Azure Application Gateway Ingress Controller with WAF and SSL termination.',
         deployType: 'AKS add-on',
         requirements: function() { return []; },
+        manualOnly: true,
         guidance: {
-          commands: ['az aks enable-addons -g <rg> -n <aks> --addons ingress-appgw --appgw-subnet-cidr 10.x.18.0/24'],
+          commands: ['az aks enable-addons -g <rg> -n <aks> --addons ingress-appgw --appgw-subnet-cidr <YOUR_APPGW_SUBNET_CIDR>'],
           verifyCmd: 'kubectl get pods -n kube-system -l app=ingress-appgw',
-          note: 'Requires a dedicated subnet for Application Gateway.'
+          note: 'Requires a dedicated subnet for Application Gateway. Replace <YOUR_APPGW_SUBNET_CIDR> with an unused /24 in your VNet.'
         }
       },
       {
@@ -419,10 +424,11 @@ const ECOSYSTEM_TOOLS = {
         deployType: 'AKS add-on',
         requirements: function() { return []; },
         conflicts: ['argocd'],
+        manualOnly: true,
         guidance: {
-          commands: ['az k8s-configuration flux create -g <rg> -c <aks> -n gitops --namespace flux-system -t managedClusters --scope cluster -u <git-repo>'],
+          commands: ['az k8s-configuration flux create -g <rg> -c <aks> -n gitops --namespace flux-system -t managedClusters --scope cluster -u <YOUR_GIT_REPO_URL>'],
           verifyCmd: 'az k8s-configuration flux list -g <rg> -c <aks> -t managedClusters',
-          note: 'Cannot be combined with ArgoCD. Azure-managed, no Helm needed.'
+          note: 'Cannot be combined with ArgoCD. Azure-managed, no Helm needed. Replace <YOUR_GIT_REPO_URL> with your Git repository URL.'
         }
       },
       {
@@ -527,6 +533,83 @@ const ECOSYSTEM_TOOLS = {
     ]
   }
 };
+
+// ============================================================
+// SHARED ECOSYSTEM TOOL PLAN
+// ============================================================
+
+var BICEP_NATIVE_TOOL_IDS = {
+  'azure-monitor': 1,
+  'azure-policy': 1,
+  'csi-secret-store': 1
+};
+
+function getAllEcosystemTools() {
+  var all = [];
+  var catKeys = Object.keys(ECOSYSTEM_TOOLS);
+  for (var ci = 0; ci < catKeys.length; ci++) {
+    var catTools = ECOSYSTEM_TOOLS[catKeys[ci]].tools;
+    for (var ti = 0; ti < catTools.length; ti++) {
+      all.push(catTools[ti]);
+    }
+  }
+  return all;
+}
+
+function getEcosystemToolPlan(s) {
+  var selected = (s && s.ecosystemTools) ? s.ecosystemTools : {};
+  var allTools = getAllEcosystemTools();
+  var plan = {
+    selected: [],
+    automated: [],
+    manual: [],
+    bicepNative: [],
+    needsHelm: false,
+    hasPostDeployScript: false,
+    hasStarterCommands: false,
+    mode: 'none'
+  };
+
+  for (var i = 0; i < allTools.length; i++) {
+    var tool = allTools[i];
+    if (!selected[tool.id]) continue;
+
+    plan.selected.push(tool);
+
+    if (BICEP_NATIVE_TOOL_IDS[tool.id]) {
+      plan.bicepNative.push(tool);
+      continue;
+    }
+
+    if (!tool.guidance || !tool.guidance.commands || !tool.guidance.commands.length) {
+      continue;
+    }
+
+    if (tool.manualOnly) {
+      plan.manual.push(tool);
+      plan.hasStarterCommands = true;
+    } else {
+      plan.automated.push(tool);
+      if (tool.deployType === 'Helm install') {
+        plan.needsHelm = true;
+      }
+    }
+  }
+
+  plan.hasPostDeployScript = plan.automated.length > 0 || plan.manual.length > 0;
+
+  if (plan.automated.length > 0 && plan.manual.length > 0) {
+    plan.mode = 'mixed';
+  } else if (plan.automated.length > 0) {
+    plan.mode = 'automated-only';
+  } else if (plan.manual.length > 0) {
+    plan.mode = 'manual-only';
+  } else if (plan.bicepNative.length > 0) {
+    plan.mode = 'bicep-native-only';
+  }
+
+  return plan;
+}
 
 // ============================================================
 // BICEP TEMPLATES
@@ -2131,6 +2214,12 @@ function setValNow(key, value) {
   else if (typeof value === 'object' && value !== null) value = Object.assign({}, value);
   state[key].value = value;
   state[key]._edited = true;
+  // Private clusters cannot use authorizedIPRanges — clear stale values
+  if (key === 'enablePrivateCluster' && value === true) {
+    if (state.apiServerAuthorizedIPs) {
+      state.apiServerAuthorizedIPs.value = [];
+    }
+  }
   autoSave();
   if (_renderTimer) clearTimeout(_renderTimer);
   _renderTimer = null;
@@ -2246,8 +2335,14 @@ function validateStep(stepNum) {
       result.warnings.push('Free tier has no SLA. Acc/prod environments should use Standard or Premium for uptime guarantees.');
     }
     var step1Zones = getVal('availabilityZones');
+    var step1Region = getVal('location') || '';
+    var step1RegionHasZones = REGIONS_WITHOUT_ZONES.indexOf(step1Region) === -1;
     if ((step1Env === 'acc' || step1Env === 'prod') && (!step1Zones || step1Zones.length === 0)) {
-      result.warnings.push('No availability zones configured. Acc/prod environments should use zones [1,2,3] for zonal resilience.');
+      if (step1RegionHasZones) {
+        result.warnings.push('No availability zones configured. Acc/prod environments should use zones [1,2,3] for zonal resilience.');
+      } else {
+        result.infos.push('Region ' + step1Region + ' does not support availability zones. Consider a zone-enabled region for production resilience.');
+      }
     }
   }
   if (stepNum === 2) {
@@ -2787,6 +2882,15 @@ function warningsHtml(warnings) {
     '<ul class="text-sm text-yellow-600 list-disc list-inside">' + items + '</ul></div>';
 }
 
+function infosHtml(infos) {
+  if (!infos.length) return '';
+  var items = '';
+  for (var i = 0; i < infos.length; i++) items += '<li>' + infos[i] + '</li>';
+  return '<div class="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-3">' +
+    '<h4 class="text-sm font-semibold text-blue-700 mb-1">Info</h4>' +
+    '<ul class="text-sm text-blue-600 list-disc list-inside">' + items + '</ul></div>';
+}
+
 function infoPanel(text) {
   return '<div class="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-700">' + text + '</div>';
 }
@@ -2933,7 +3037,8 @@ function renderStep1() {
       'params', 'AKS-supported Kubernetes version.') +
 
     errorsHtml(validation.errors) +
-    warningsHtml(validation.warnings);
+    warningsHtml(validation.warnings) +
+    infosHtml(validation.infos);
 }
 
 function renderStep2() {
@@ -3447,7 +3552,8 @@ function renderStep4() {
     '</details>' +
 
     errorsHtml(validation.errors) +
-    warningsHtml(validation.warnings);
+    warningsHtml(validation.warnings) +
+    infosHtml(validation.infos);
 }
 function toggleZone(zone) {
   var zones = (getVal('availabilityZones') || []).slice();
@@ -3612,10 +3718,20 @@ function renderStep6() {
   var validation = validateStep(6);
   var tools = getVal('ecosystemTools') || {};
   var s = getFlatState();
+  var plan = getEcosystemToolPlan(s);
+
+  var step6Intro = 'Select tools to include in your deployment guide.';
+  if (plan.mode === 'manual-only') {
+    step6Intro += ' Manual-only selections will generate starter commands you review and edit before running.';
+  } else if (plan.mode === 'mixed') {
+    step6Intro += ' Automatable tools will be installed by post-deploy automation, while manual tools will include starter commands.';
+  } else {
+    step6Intro += ' Install commands and configuration guidance will be generated for each selected tool.';
+  }
 
   var html = '<h2 class="text-xl font-bold text-gray-800 mb-1">Step 6: Ecosystem Tools</h2>' +
     '<p class="text-sm text-gray-500 mb-4">Select tools to include in your deployment guide.</p>' +
-    infoPanel('Select the tools to include in your deployment guide. Starter Helm commands and configuration guidance will be generated for each selected tool.') +
+    infoPanel(step6Intro) +
     '<div class="mt-6"></div>';
 
   var catKeys = Object.keys(ECOSYSTEM_TOOLS);
@@ -3679,6 +3795,7 @@ function renderStep6() {
   }
 
   html += warningsHtml(validation.warnings);
+  html += infosHtml(validation.infos);
 
   return html;
 }
@@ -3714,6 +3831,30 @@ function renderDeployGuidePanel(s) {
       'chmod +x deploy.sh\n' +
       './deploy.sh') +
     '</div></div>';
+
+  var plan = getEcosystemToolPlan(s);
+
+  // --- Post-deploy tools note (only when ecosystem tools are selected) ---
+  if (plan.hasPostDeployScript) {
+    var panelDesc;
+    if (plan.mode === 'mixed') {
+      panelDesc = 'After deploy.sh completes, run post-deploy-tools.sh. It polls until the deployment succeeds, installs automatable tools, and prints starter commands for tools that require manual configuration.';
+    } else if (plan.mode === 'automated-only') {
+      panelDesc = 'After deploy.sh completes, run post-deploy-tools.sh to install selected ecosystem tools. It polls until the deployment succeeds, then installs and verifies each tool.';
+    } else {
+      panelDesc = 'After deploy.sh completes, run post-deploy-tools.sh to get cluster credentials. Selected tools require manual configuration — the script prints starter commands to review and edit before running.';
+    }
+    html += '<div class="border border-blue-200 rounded-lg mb-4">' +
+      '<div class="px-4 py-3 bg-blue-50 border-b border-blue-200 rounded-t-lg">' +
+        '<h4 class="text-sm font-semibold text-blue-700">Post-Deploy: Ecosystem Tools</h4>' +
+        '<p class="text-xs text-blue-600 mt-1">' + panelDesc + '</p>' +
+      '</div>' +
+      '<div class="p-4">' +
+      copyableBlock('post-deploy-script',
+        'chmod +x post-deploy-tools.sh\n' +
+        './post-deploy-tools.sh') +
+      '</div></div>';
+  }
 
   // --- Manual Deploy (no deploy.sh) ---
   html += '<div class="border border-gray-200 rounded-lg mb-4">' +
@@ -3791,46 +3932,46 @@ function renderDeployGuidePanel(s) {
   }
 
   // --- Ecosystem tools ---
-  var tools = s.ecosystemTools || {};
-  var catKeys = Object.keys(ECOSYSTEM_TOOLS);
   var toolCards = '';
-  for (var ci = 0; ci < catKeys.length; ci++) {
-    var catTools = ECOSYSTEM_TOOLS[catKeys[ci]].tools;
-    for (var ti = 0; ti < catTools.length; ti++) {
-      var tool = catTools[ti];
-      if (!tools[tool.id]) continue;
-      var g = tool.guidance;
-      var cmds = '';
-      if (g && g.commands && g.commands.length) {
-        for (var ci2 = 0; ci2 < g.commands.length; ci2++) {
-          cmds += g.commands[ci2]
-            .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName)
-            .replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName) + '\n';
-        }
-        if (g.verifyCmd) {
-          cmds += '\n# Verify\n' + g.verifyCmd
-            .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName)
-            .replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName);
-        }
+  for (var sti = 0; sti < plan.selected.length; sti++) {
+    var tool = plan.selected[sti];
+    var g = tool.guidance;
+    var cmds = '';
+    if (g && g.commands && g.commands.length) {
+      for (var ci2 = 0; ci2 < g.commands.length; ci2++) {
+        cmds += g.commands[ci2]
+          .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName)
+          .replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName) + '\n';
       }
-      toolCards += '<div class="border border-gray-200 rounded-lg p-3 mb-2">' +
-        '<div class="flex justify-between items-start mb-2">' +
-          '<div><span class="text-sm font-medium text-gray-700">' + escapeHtml(tool.label) + '</span>' +
-          '<span class="ml-2 px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-700">' + escapeHtml(tool.deployType) + '</span></div></div>';
-      if (cmds) {
-        toolCards += copyableBlock('tool-' + tool.id, escapeHtml(cmds.trim()));
+      if (g.verifyCmd) {
+        cmds += '\n# Verify\n' + g.verifyCmd
+          .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName)
+          .replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName);
       }
-      if (g && g.note) {
-        toolCards += '<p class="text-xs text-gray-500 mt-2">' + escapeHtml(g.note) + '</p>';
-      }
-      toolCards += '</div>';
     }
+    toolCards += '<div class="border border-gray-200 rounded-lg p-3 mb-2">' +
+      '<div class="flex justify-between items-start mb-2">' +
+        '<div><span class="text-sm font-medium text-gray-700">' + escapeHtml(tool.label) + '</span>' +
+        '<span class="ml-2 px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-700">' + escapeHtml(tool.deployType) + '</span></div></div>';
+    if (cmds) {
+      toolCards += copyableBlock('tool-' + tool.id, escapeHtml(cmds.trim()));
+    }
+    if (g && g.note) {
+      toolCards += '<p class="text-xs text-gray-500 mt-2">' + escapeHtml(g.note) + '</p>';
+    }
+    toolCards += '</div>';
   }
   if (toolCards) {
+    var cardSubtext;
+    if (plan.mode === 'manual-only') {
+      cardSubtext = 'Starter commands for selected tools. Review and edit before running.';
+    } else {
+      cardSubtext = 'Install commands for selected tools. Run after cluster is ready.';
+    }
     html += '<div class="border border-gray-200 rounded-lg mb-4">' +
       '<div class="px-4 py-3 bg-gray-50 border-b border-gray-200 rounded-t-lg">' +
         '<h4 class="text-sm font-semibold text-gray-700">Post-Deploy: Ecosystem Tools</h4>' +
-        '<p class="text-xs text-gray-500 mt-1">Install commands for selected tools. Run after cluster is ready.</p>' +
+        '<p class="text-xs text-gray-500 mt-1">' + cardSubtext + '</p>' +
       '</div>' +
       '<div class="p-4">' + toolCards + '</div></div>';
   }
@@ -3893,6 +4034,15 @@ function renderStep7() {
     html += '<div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3">' +
       '<h4 class="text-sm font-semibold text-yellow-700 mb-1">Warnings</h4>' +
       '<ul class="text-sm text-yellow-600 list-disc list-inside">' + warnItems + '</ul></div>';
+  }
+  if (validation.infos.length > 0) {
+    var infoItems = '';
+    for (var i = 0; i < validation.infos.length; i++) {
+      infoItems += '<li>' + escapeHtml(validation.infos[i]) + '</li>';
+    }
+    html += '<div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">' +
+      '<h4 class="text-sm font-semibold text-blue-700 mb-1">Info</h4>' +
+      '<ul class="text-sm text-blue-600 list-disc list-inside">' + infoItems + '</ul></div>';
   }
   if (validation.errors.length === 0 && validation.warnings.length === 0) {
     html += '<div class="bg-green-50 border border-green-200 rounded-lg p-3 mb-3">' +
@@ -4182,6 +4332,8 @@ function generateBicepParam(s) {
 
   var zones = Array.isArray(s.availabilityZones) ? s.availabilityZones : [];
   var authIPs = Array.isArray(s.apiServerAuthorizedIPs) ? s.apiServerAuthorizedIPs : [];
+  // Private clusters cannot use authorizedIPRanges — force empty
+  if (s.enablePrivateCluster) authIPs = [];
 
   lines.push('param aksConfig = {');
   lines.push('  kubernetesVersion: ' + bicepString(s.kubernetesVersion || '1.35'));
@@ -4415,11 +4567,170 @@ function generateDeployScript(s) {
   return lines.join('\n');
 }
 
+function generatePostDeployScript(s) {
+  var env = s.environment || 'dev';
+  var region = s.location || 'westeurope';
+  var rgName = 'rg-' + (s.customerName || 'deploy') + '-' + env + '-' + region;
+  var aksName = 'aks-' + (s.customerName || 'deploy') + '-' + env;
+  var deployName = 'aks-' + (s.customerName || 'deploy') + '-' + env;
+  var plan = getEcosystemToolPlan(s);
+
+  if (!plan.hasPostDeployScript) return '';
+
+  var selectedTools = plan.automated;
+  var manualTools = plan.manual;
+
+  var lines = [];
+  lines.push('#!/usr/bin/env bash');
+  lines.push('set -euo pipefail');
+  lines.push('');
+  lines.push('# -----------------------------------------------------------');
+  lines.push('# post-deploy-tools.sh — wait for deployment + install ecosystem tools');
+  lines.push('# Generated by AKS Configurator');
+  lines.push('# -----------------------------------------------------------');
+  lines.push('');
+  lines.push('RG_NAME="' + rgName + '"');
+  lines.push('AKS_NAME="' + aksName + '"');
+  lines.push('DEPLOY_NAME="' + deployName + '"');
+  lines.push('');
+
+  if (plan.needsHelm) {
+    lines.push('# Pre-check: Helm required');
+    lines.push('if ! command -v helm &>/dev/null; then');
+    lines.push('  echo "ERROR: helm is not installed. Install from https://helm.sh/docs/intro/install/"');
+    lines.push('  exit 1');
+    lines.push('fi');
+    lines.push('');
+  }
+
+  // Step 1: Poll deployment status
+  lines.push('# -------------------------------------------------------');
+  lines.push('# Step 1: Wait for deployment to succeed');
+  lines.push('# -------------------------------------------------------');
+  lines.push('echo "==> [1/4] Waiting for deployment $DEPLOY_NAME to complete..."');
+  lines.push('while true; do');
+  lines.push('  DEPLOY_STATE=$(az deployment sub show --name "$DEPLOY_NAME" --query properties.provisioningState -o tsv 2>/dev/null || echo "NotFound")');
+  lines.push('  case "$DEPLOY_STATE" in');
+  lines.push('    Succeeded)');
+  lines.push('      echo "    Deployment succeeded."');
+  lines.push('      break');
+  lines.push('      ;;');
+  lines.push('    Failed|Canceled)');
+  lines.push('      echo "    ERROR: Deployment finished with state: $DEPLOY_STATE"');
+  lines.push('      echo "    Run: az deployment operation sub list --name $DEPLOY_NAME --query \\"[?properties.provisioningState==\'Failed\']\\" -o json"');
+  lines.push('      exit 1');
+  lines.push('      ;;');
+  lines.push('    NotFound)');
+  lines.push('      echo "    ERROR: Deployment $DEPLOY_NAME not found. Run deploy.sh first."');
+  lines.push('      exit 1');
+  lines.push('      ;;');
+  lines.push('    *)');
+  lines.push('      echo "    Status: $DEPLOY_STATE — polling again in 30s..."');
+  lines.push('      sleep 30');
+  lines.push('      ;;');
+  lines.push('  esac');
+  lines.push('done');
+  lines.push('echo ""');
+  lines.push('');
+
+  // Step 2: Get AKS credentials
+  lines.push('# -------------------------------------------------------');
+  lines.push('# Step 2: Get AKS credentials');
+  lines.push('# -------------------------------------------------------');
+  lines.push('echo "==> [2/4] Getting AKS credentials..."');
+  lines.push('az aks get-credentials -g "$RG_NAME" -n "$AKS_NAME" --overwrite-existing');
+  lines.push('echo "    Connected to $AKS_NAME"');
+  lines.push('echo ""');
+  lines.push('');
+
+  // Step 3: Install automatable ecosystem tools
+  if (selectedTools.length > 0) {
+    lines.push('# -------------------------------------------------------');
+    lines.push('# Step 3: Install ecosystem tools');
+    lines.push('# -------------------------------------------------------');
+    lines.push('echo "==> [3/4] Installing ecosystem tools..."');
+    lines.push('echo ""');
+    lines.push('');
+
+    for (var si = 0; si < selectedTools.length; si++) {
+      var t = selectedTools[si];
+      var g = t.guidance;
+      lines.push('# --- ' + t.label + ' (' + t.deployType + ') ---');
+      lines.push('echo "    Installing ' + t.label + '..."');
+      for (var ci2 = 0; ci2 < g.commands.length; ci2++) {
+        var cmd = g.commands[ci2]
+          .replace(/<rg>/g, '$RG_NAME')
+          .replace(/<aks>/g, '$AKS_NAME')
+          .replace(/\{rgName\}/g, '$RG_NAME')
+          .replace(/\{aksName\}/g, '$AKS_NAME');
+        lines.push(cmd);
+      }
+      lines.push('echo ""');
+      lines.push('');
+    }
+
+    // Step 4: Verify installations
+    lines.push('# -------------------------------------------------------');
+    lines.push('# Step 4: Verify installations');
+    lines.push('# -------------------------------------------------------');
+    lines.push('echo "==> [4/4] Verifying installations..."');
+    lines.push('echo ""');
+    lines.push('');
+
+    for (var vi = 0; vi < selectedTools.length; vi++) {
+      var vt = selectedTools[vi];
+      var vg = vt.guidance;
+      if (vg && vg.verifyCmd) {
+        var verifyCmd = vg.verifyCmd
+          .replace(/<rg>/g, '$RG_NAME')
+          .replace(/<aks>/g, '$AKS_NAME')
+          .replace(/\{rgName\}/g, '$RG_NAME')
+          .replace(/\{aksName\}/g, '$AKS_NAME');
+        lines.push('echo "    Verifying ' + vt.label + '..."');
+        lines.push(verifyCmd);
+        lines.push('echo ""');
+      }
+    }
+
+    lines.push('echo "==> Automated tools installed. Verify with: kubectl get pods --all-namespaces"');
+  } else {
+    lines.push('echo "==> No automatable tools selected. See manual steps below."');
+  }
+
+  // Manual-only tools: emit as comments with instructions
+  if (manualTools.length > 0) {
+    lines.push('');
+    lines.push('echo ""');
+    lines.push('echo "==> The following tools require manual configuration before running:"');
+    for (var mi = 0; mi < manualTools.length; mi++) {
+      var mt = manualTools[mi];
+      var mg = mt.guidance;
+      lines.push('echo ""');
+      lines.push('echo "  ' + mt.label + ' (' + mt.deployType + ')"');
+      if (mg && mg.note) {
+        lines.push('echo "    ' + mg.note.replace(/"/g, '\\"') + '"');
+      }
+      lines.push('echo "    Starter command (edit before running):"');
+      for (var mci = 0; mci < mg.commands.length; mci++) {
+        var mcmd = mg.commands[mci]
+          .replace(/<rg>/g, '$RG_NAME')
+          .replace(/<aks>/g, '$AKS_NAME');
+        lines.push('echo "    ' + mcmd.replace(/"/g, '\\"') + '"');
+      }
+    }
+    lines.push('echo ""');
+  }
+  lines.push('');
+
+  return lines.join('\n');
+}
+
 function generateDeploymentGuide(s) {
   var rgName = 'rg-' + (s.customerName || '{name}') + '-' + (s.environment || '{env}') + '-' + (s.location || '{region}');
   var aksName = 'aks-' + (s.customerName || '{name}') + '-' + (s.environment || '{env}');
   var env = s.environment || 'dev';
   var region = s.location || 'westeurope';
+  var plan = getEcosystemToolPlan(s);
 
   var lines = [];
   lines.push('# AKS Deployment Guide');
@@ -4455,6 +4766,11 @@ function generateDeploymentGuide(s) {
   lines.push('- Bicep CLI installed (`az bicep version`)');
   lines.push('- Sufficient permissions to create resources at subscription scope');
   lines.push('- `kubectl` installed for cluster management');
+
+  if (plan.needsHelm) {
+    lines.push('- Helm 3 installed (`helm version`) — required for selected ecosystem tools');
+  }
+
   if (s.enablePrivateCluster) {
     lines.push('- VPN or private network access to the VNet (private cluster)');
   }
@@ -4471,6 +4787,26 @@ function generateDeploymentGuide(s) {
   lines.push('./deploy.sh');
   lines.push('```');
   lines.push('');
+
+  if (plan.hasPostDeployScript) {
+    lines.push('After the infrastructure deployment completes, run the post-deploy script:');
+    lines.push('');
+    lines.push('```bash');
+    lines.push('chmod +x post-deploy-tools.sh');
+    lines.push('./post-deploy-tools.sh');
+    lines.push('```');
+    lines.push('');
+    lines.push('The script polls until the AKS deployment succeeds and gets cluster credentials.');
+    if (plan.mode === 'mixed') {
+      lines.push('It installs automatable tools directly and prints starter commands for tools that require manual configuration (custom subnet CIDRs, Git repo URLs).');
+    } else if (plan.mode === 'automated-only') {
+      lines.push('It installs each selected tool automatically.');
+    } else if (plan.mode === 'manual-only') {
+      lines.push('Selected tools require manual configuration — the script prints starter commands you should review and edit before running.');
+    }
+    lines.push('');
+  }
+
   lines.push('Or deploy manually:');
   lines.push('');
   lines.push('```bash');
@@ -4537,59 +4873,74 @@ function generateDeploymentGuide(s) {
     lines.push('');
   }
 
-  // Ecosystem tools
-  var tools = s.ecosystemTools || {};
-  var catKeys = Object.keys(ECOSYSTEM_TOOLS);
+  // Ecosystem tools — driven from the shared plan
+  var installableTools = plan.automated.concat(plan.manual);
   var hasToolSection = false;
-  for (var ci = 0; ci < catKeys.length; ci++) {
-    var catTools = ECOSYSTEM_TOOLS[catKeys[ci]].tools;
-    for (var ti = 0; ti < catTools.length; ti++) {
-      var tool = catTools[ti];
-      if (!tools[tool.id]) continue;
-      if (!hasToolSection) {
-        lines.push('## Ecosystem Tools');
-        lines.push('');
-        hasToolSection = true;
-      }
-      var g = tool.guidance;
 
-      lines.push('### ' + tool.label);
+  for (var eti = 0; eti < installableTools.length; eti++) {
+    var tool = installableTools[eti];
+    if (!hasToolSection) {
+      lines.push('## Ecosystem Tools');
       lines.push('');
-      lines.push(tool.description);
-      lines.push('');
-
-      if (g && g.commands && g.commands.length) {
-        lines.push('```bash');
-        for (var ci2 = 0; ci2 < g.commands.length; ci2++) {
-          var cmd = g.commands[ci2]
-            .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName)
-            .replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName);
-          lines.push(cmd);
+      if (plan.hasPostDeployScript) {
+        if (plan.automated.length > 0) {
+          lines.push('Run `post-deploy-tools.sh` after deployment to install automatable tools. Tools marked *manual* require editing before running.');
+        } else {
+          lines.push('Run `post-deploy-tools.sh` after deployment to get cluster credentials and view starter commands for manual tools.');
         }
-        lines.push('```');
         lines.push('');
       }
+      hasToolSection = true;
+    }
+    var g = tool.guidance;
 
-      if (g && g.verifyCmd) {
-        var verifyCmd = g.verifyCmd
+    lines.push('### ' + tool.label + (tool.manualOnly ? ' *(manual)*' : ''));
+    lines.push('');
+    lines.push(tool.description);
+    lines.push('');
+
+    if (g && g.commands && g.commands.length) {
+      lines.push('```bash');
+      for (var ci2 = 0; ci2 < g.commands.length; ci2++) {
+        var cmd = g.commands[ci2]
           .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName)
           .replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName);
-        lines.push('Verify:');
-        lines.push('');
-        lines.push('```bash');
-        lines.push(verifyCmd);
-        lines.push('```');
-        lines.push('');
+        lines.push(cmd);
       }
-
-      if (g && g.note) {
-        lines.push('> ' + g.note);
-        lines.push('');
-      }
-
-      lines.push('*Starter commands -- review values for production use.*');
+      lines.push('```');
       lines.push('');
     }
+
+    if (g && g.verifyCmd) {
+      var verifyCmd = g.verifyCmd
+        .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName)
+        .replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName);
+      lines.push('Verify:');
+      lines.push('');
+      lines.push('```bash');
+      lines.push(verifyCmd);
+      lines.push('```');
+      lines.push('');
+    }
+
+    if (g && g.note) {
+      lines.push('> ' + g.note);
+      lines.push('');
+    }
+  }
+  if (plan.bicepNative.length > 0) {
+    if (!hasToolSection) {
+      lines.push('## Ecosystem Tools');
+      lines.push('');
+    }
+    lines.push('### Already deployed via Bicep');
+    lines.push('');
+    lines.push('The following are enabled in the Bicep template and deploy automatically with the cluster — no post-deploy action needed:');
+    lines.push('');
+    for (var bni = 0; bni < plan.bicepNative.length; bni++) {
+      lines.push('- ' + plan.bicepNative[bni].label);
+    }
+    lines.push('');
   }
 
   // Validation checklist
@@ -4638,6 +4989,12 @@ function downloadAllZip() {
 
   // Add the deploy script
   zip.file('infra/deploy.sh', generateDeployScript(s));
+
+  // Add the post-deploy tools script (only when ecosystem tools are selected)
+  var postDeployScript = generatePostDeployScript(s);
+  if (postDeployScript) {
+    zip.file('infra/post-deploy-tools.sh', postDeployScript);
+  }
 
   // Generate and download
   zip.generateAsync({ type: 'blob' }).then(function(blob) {
@@ -4893,8 +5250,28 @@ window.__TEST__ = {
   ENV_DEFAULTS: ENV_DEFAULTS,
   BICEP_TEMPLATES: BICEP_TEMPLATES,
   VM_SIZES: VM_SIZES,
+  ECOSYSTEM_TOOLS: ECOSYSTEM_TOOLS,
+  REGIONS_WITHOUT_ZONES: REGIONS_WITHOUT_ZONES,
+  getEcosystemToolPlan: getEcosystemToolPlan,
+  renderStep6: renderStep6,
+  renderDeployGuidePanel: renderDeployGuidePanel,
   generateBicepParam: generateBicepParam,
   generateDeploymentGuide: generateDeploymentGuide,
+  generateDeployScript: generateDeployScript,
+  generatePostDeployScript: generatePostDeployScript,
+  validateStep: validateStep,
+  validateAllSteps: validateAllSteps,
+  initState: initState,
+  setValNow: setValNow,
+  setVal: setVal,
+  getVal: getVal,
+  getVmVcpu: getVmVcpu,
+  vmSupportsEphemeral: vmSupportsEphemeral,
+  getFlatState: getFlatState,
+  parseCIDR: parseCIDR,
+  isIPInCIDR: isIPInCIDR,
+  cidrsOverlap: cidrsOverlap,
+  isWithinCIDR: isWithinCIDR,
   SCHEMA_VERSION: SCHEMA_VERSION
 };
 
