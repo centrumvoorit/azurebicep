@@ -97,6 +97,8 @@ const REGIONS = [
   'uksouth', 'ukwest', 'germanywestcentral', 'swedencentral', 'norwayeast', 'francecentral'
 ];
 
+const REGIONS_WITHOUT_ZONES = ['ukwest'];
+
 const K8S_VERSIONS = ['1.33', '1.34', '1.35'];
 
 const UPGRADE_CHANNELS = ['none', 'patch', 'stable', 'rapid', 'node-image'];
@@ -2131,6 +2133,12 @@ function setValNow(key, value) {
   else if (typeof value === 'object' && value !== null) value = Object.assign({}, value);
   state[key].value = value;
   state[key]._edited = true;
+  // Private clusters cannot use authorizedIPRanges — clear stale values
+  if (key === 'enablePrivateCluster' && value === true) {
+    if (state.apiServerAuthorizedIPs) {
+      state.apiServerAuthorizedIPs.value = [];
+    }
+  }
   autoSave();
   if (_renderTimer) clearTimeout(_renderTimer);
   _renderTimer = null;
@@ -2246,8 +2254,14 @@ function validateStep(stepNum) {
       result.warnings.push('Free tier has no SLA. Acc/prod environments should use Standard or Premium for uptime guarantees.');
     }
     var step1Zones = getVal('availabilityZones');
+    var step1Region = getVal('location') || '';
+    var step1RegionHasZones = REGIONS_WITHOUT_ZONES.indexOf(step1Region) === -1;
     if ((step1Env === 'acc' || step1Env === 'prod') && (!step1Zones || step1Zones.length === 0)) {
-      result.warnings.push('No availability zones configured. Acc/prod environments should use zones [1,2,3] for zonal resilience.');
+      if (step1RegionHasZones) {
+        result.warnings.push('No availability zones configured. Acc/prod environments should use zones [1,2,3] for zonal resilience.');
+      } else {
+        result.infos.push('Region ' + step1Region + ' does not support availability zones. Consider a zone-enabled region for production resilience.');
+      }
     }
   }
   if (stepNum === 2) {
@@ -2787,6 +2801,15 @@ function warningsHtml(warnings) {
     '<ul class="text-sm text-yellow-600 list-disc list-inside">' + items + '</ul></div>';
 }
 
+function infosHtml(infos) {
+  if (!infos.length) return '';
+  var items = '';
+  for (var i = 0; i < infos.length; i++) items += '<li>' + infos[i] + '</li>';
+  return '<div class="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-3">' +
+    '<h4 class="text-sm font-semibold text-blue-700 mb-1">Info</h4>' +
+    '<ul class="text-sm text-blue-600 list-disc list-inside">' + items + '</ul></div>';
+}
+
 function infoPanel(text) {
   return '<div class="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-700">' + text + '</div>';
 }
@@ -2933,7 +2956,8 @@ function renderStep1() {
       'params', 'AKS-supported Kubernetes version.') +
 
     errorsHtml(validation.errors) +
-    warningsHtml(validation.warnings);
+    warningsHtml(validation.warnings) +
+    infosHtml(validation.infos);
 }
 
 function renderStep2() {
@@ -3447,7 +3471,8 @@ function renderStep4() {
     '</details>' +
 
     errorsHtml(validation.errors) +
-    warningsHtml(validation.warnings);
+    warningsHtml(validation.warnings) +
+    infosHtml(validation.infos);
 }
 function toggleZone(zone) {
   var zones = (getVal('availabilityZones') || []).slice();
@@ -3679,6 +3704,7 @@ function renderStep6() {
   }
 
   html += warningsHtml(validation.warnings);
+  html += infosHtml(validation.infos);
 
   return html;
 }
@@ -3893,6 +3919,15 @@ function renderStep7() {
     html += '<div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3">' +
       '<h4 class="text-sm font-semibold text-yellow-700 mb-1">Warnings</h4>' +
       '<ul class="text-sm text-yellow-600 list-disc list-inside">' + warnItems + '</ul></div>';
+  }
+  if (validation.infos.length > 0) {
+    var infoItems = '';
+    for (var i = 0; i < validation.infos.length; i++) {
+      infoItems += '<li>' + escapeHtml(validation.infos[i]) + '</li>';
+    }
+    html += '<div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">' +
+      '<h4 class="text-sm font-semibold text-blue-700 mb-1">Info</h4>' +
+      '<ul class="text-sm text-blue-600 list-disc list-inside">' + infoItems + '</ul></div>';
   }
   if (validation.errors.length === 0 && validation.warnings.length === 0) {
     html += '<div class="bg-green-50 border border-green-200 rounded-lg p-3 mb-3">' +
@@ -4182,6 +4217,8 @@ function generateBicepParam(s) {
 
   var zones = Array.isArray(s.availabilityZones) ? s.availabilityZones : [];
   var authIPs = Array.isArray(s.apiServerAuthorizedIPs) ? s.apiServerAuthorizedIPs : [];
+  // Private clusters cannot use authorizedIPRanges — force empty
+  if (s.enablePrivateCluster) authIPs = [];
 
   lines.push('param aksConfig = {');
   lines.push('  kubernetesVersion: ' + bicepString(s.kubernetesVersion || '1.35'));
