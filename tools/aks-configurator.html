@@ -2240,6 +2240,15 @@ function validateStep(stepNum) {
     if (!getVal('location')) {
       result.errors.push('Region is required.');
     }
+    var step1Env = getVal('environment') || 'dev';
+    var step1Sku = getVal('skuTier') || (step1Env === 'dev' ? 'Free' : 'Standard');
+    if ((step1Env === 'acc' || step1Env === 'prod') && step1Sku === 'Free') {
+      result.warnings.push('Free tier has no SLA. Acc/prod environments should use Standard or Premium for uptime guarantees.');
+    }
+    var step1Zones = getVal('availabilityZones');
+    if ((step1Env === 'acc' || step1Env === 'prod') && (!step1Zones || step1Zones.length === 0)) {
+      result.warnings.push('No availability zones configured. Acc/prod environments should use zones [1,2,3] for zonal resilience.');
+    }
   }
   if (stepNum === 2) {
     var ids = getVal('adminGroupObjectIds') || [];
@@ -2261,13 +2270,13 @@ function validateStep(stepNum) {
         }
       }
     }
-    if (!getVal('tagCostCenter')) {
+    if (!(getVal('tagCostCenter') || '').trim()) {
       result.errors.push('Tag: CostCenter is required.');
     }
-    if (!getVal('tagOwner')) {
+    if (!(getVal('tagOwner') || '').trim()) {
       result.errors.push('Tag: Owner is required.');
     }
-    if (!getVal('tagProject')) {
+    if (!(getVal('tagProject') || '').trim()) {
       result.errors.push('Tag: Project is required.');
     }
   }
@@ -2298,8 +2307,31 @@ function validateStep(stepNum) {
 
     if (dnsIp && !/^\d+\.\d+\.\d+\.\d+$/.test(dnsIp)) {
       result.errors.push('DNS service IP is not a valid IP address.');
-    } else if (parseCIDR(svcCidr) && dnsIp && !isIPInCIDR(dnsIp, svcCidr)) {
-      result.errors.push('DNS service IP must be within the Service CIDR.');
+    } else if (dnsIp && parseCIDR(svcCidr)) {
+      if (!isIPInCIDR(dnsIp, svcCidr)) {
+        result.errors.push('DNS service IP must be within the Service CIDR.');
+      }
+      var dnsOctets = dnsIp.split('.').map(Number);
+      var svcRange = cidrRange(svcCidr);
+      if (svcRange) {
+        var dnsNum = ((dnsOctets[0] << 24) | (dnsOctets[1] << 16) | (dnsOctets[2] << 8) | dnsOctets[3]) >>> 0;
+        if (dnsNum === svcRange.start) {
+          result.errors.push('DNS service IP cannot be the network address of the Service CIDR (' + dnsIp + '). Use .10 or higher.');
+        } else if (dnsNum === svcRange.start + 1) {
+          result.warnings.push('DNS service IP is .1 of the Service CIDR — Azure reserves the first IP in some configurations. Default is .10.');
+        }
+      }
+    }
+
+    // Public cluster without IP restrictions
+    var step3Env = getVal('environment') || 'dev';
+    var step3Private = getVal('enablePrivateCluster');
+    if (!step3Private) {
+      var step3AuthIPs = getVal('apiServerAuthorizedIPs') || [];
+      var step3ValidIPs = step3AuthIPs.filter(function(ip) { return ip.trim() !== ''; });
+      if (step3ValidIPs.length === 0 && (step3Env === 'acc' || step3Env === 'prod')) {
+        result.warnings.push('Public cluster with no API server IP restrictions — the Kubernetes API is reachable from the entire internet. Add authorized IP ranges or switch to Private.');
+      }
     }
 
     // Capacity warning: estimate required IPs for AKS subnet
@@ -2372,6 +2404,14 @@ function validateStep(stepNum) {
         result.errors.push('User pool node count must be at least 1.');
       }
     }
+
+    // vCPU quota estimate
+    var sysVmVcpu = getVmVcpu(getVal('systemNodeVmSize') || 'Standard_D2s_v5');
+    var usrVmVcpu = getVmVcpu(getVal('userNodeVmSize') || 'Standard_D4s_v5');
+    var sysMaxN = sysAuto ? (getVal('systemNodeMaxCount') || 3) : (getVal('systemNodeCount') || 3);
+    var usrMaxN = userAuto ? (getVal('userNodeMaxCount') || 3) : (getVal('userNodeCount') || 3);
+    var totalVcpu = (sysMaxN * sysVmVcpu) + (usrMaxN * usrVmVcpu);
+    result.infos.push('Estimated max vCPU usage: ' + totalVcpu + ' vCPUs (' + sysMaxN + 'x' + sysVmVcpu + ' system + ' + usrMaxN + 'x' + usrVmVcpu + ' user). Verify against your subscription quota: az vm list-usage --location {region} -o table');
   }
   if (stepNum === 5) {
     var privateCluster = getVal('enablePrivateCluster');
@@ -4159,7 +4199,7 @@ function generateBicepParam(s) {
   lines.push('  skuTier: ' + bicepString(s.skuTier || (s.environment === 'dev' ? 'Free' : 'Standard')));
   lines.push('  upgradeChannel: ' + bicepString(s.upgradeChannel || 'patch'));
   lines.push('  nodeOSUpgradeChannel: ' + bicepString(s.nodeOSUpgradeChannel || 'NodeImage'));
-  lines.push('  osDiskType: ' + bicepString(s.osDiskType || 'Ephemeral'));
+  lines.push('  osDiskType: ' + bicepString(s.osDiskType || 'Managed'));
   lines.push('  osDiskSizeGB: ' + (s.osDiskSizeGB || 30));
   lines.push('  maxPodsPerNode: ' + (s.maxPodsPerNode || 50));
   if (s.environment === 'prod' || s.environment === 'acc') {
@@ -4255,6 +4295,27 @@ function generateDeployScript(s) {
     lines.push('  "' + providers[i] + '"');
   }
   lines.push(')');
+  lines.push('');
+
+  // --- Step 0: Verify subscription ---
+  lines.push('# -------------------------------------------------------');
+  lines.push('# Step 0: Verify Azure subscription');
+  lines.push('# -------------------------------------------------------');
+  lines.push('echo "==> [0/4] Verifying Azure subscription..."');
+  lines.push('SUB_NAME=$(az account show --query name -o tsv 2>/dev/null)');
+  lines.push('SUB_ID=$(az account show --query id -o tsv 2>/dev/null)');
+  lines.push('if [ -z "$SUB_ID" ]; then');
+  lines.push('  echo "    ERROR: Not logged in. Run: az login"');
+  lines.push('  exit 1');
+  lines.push('fi');
+  lines.push('echo "    Subscription: $SUB_NAME ($SUB_ID)"');
+  lines.push('echo ""');
+  lines.push('read -rp "Correct subscription? [Y/n] " sub_confirm');
+  lines.push('if [[ "$sub_confirm" =~ ^[Nn]$ ]]; then');
+  lines.push('  echo "    Switch with: az account set --subscription <name-or-id>"');
+  lines.push('  exit 0');
+  lines.push('fi');
+  lines.push('echo ""');
   lines.push('');
 
   // --- Step 1: Resource providers ---
