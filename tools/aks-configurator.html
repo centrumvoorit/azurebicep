@@ -340,10 +340,11 @@ const ECOSYSTEM_TOOLS = {
         description: 'Azure Application Gateway Ingress Controller with WAF and SSL termination.',
         deployType: 'AKS add-on',
         requirements: function() { return []; },
+        manualOnly: true,
         guidance: {
-          commands: ['az aks enable-addons -g <rg> -n <aks> --addons ingress-appgw --appgw-subnet-cidr 10.x.18.0/24'],
+          commands: ['az aks enable-addons -g <rg> -n <aks> --addons ingress-appgw --appgw-subnet-cidr <YOUR_APPGW_SUBNET_CIDR>'],
           verifyCmd: 'kubectl get pods -n kube-system -l app=ingress-appgw',
-          note: 'Requires a dedicated subnet for Application Gateway.'
+          note: 'Requires a dedicated subnet for Application Gateway. Replace <YOUR_APPGW_SUBNET_CIDR> with an unused /24 in your VNet.'
         }
       },
       {
@@ -421,10 +422,11 @@ const ECOSYSTEM_TOOLS = {
         deployType: 'AKS add-on',
         requirements: function() { return []; },
         conflicts: ['argocd'],
+        manualOnly: true,
         guidance: {
-          commands: ['az k8s-configuration flux create -g <rg> -c <aks> -n gitops --namespace flux-system -t managedClusters --scope cluster -u <git-repo>'],
+          commands: ['az k8s-configuration flux create -g <rg> -c <aks> -n gitops --namespace flux-system -t managedClusters --scope cluster -u <YOUR_GIT_REPO_URL>'],
           verifyCmd: 'az k8s-configuration flux list -g <rg> -c <aks> -t managedClusters',
-          note: 'Cannot be combined with ArgoCD. Azure-managed, no Helm needed.'
+          note: 'Cannot be combined with ArgoCD. Azure-managed, no Helm needed. Replace <YOUR_GIT_REPO_URL> with your Git repository URL.'
         }
       },
       {
@@ -4477,6 +4479,7 @@ function generatePostDeployScript(s) {
   // Collect selected ecosystem tools (skip Bicep-native ones)
   var ecoTools = s.ecosystemTools || {};
   var selectedTools = [];
+  var manualTools = [];
   var catKeys = Object.keys(ECOSYSTEM_TOOLS);
   for (var ci = 0; ci < catKeys.length; ci++) {
     var catTools = ECOSYSTEM_TOOLS[catKeys[ci]].tools;
@@ -4485,11 +4488,15 @@ function generatePostDeployScript(s) {
       if (!ecoTools[tool.id]) continue;
       if (!tool.guidance || !tool.guidance.commands || !tool.guidance.commands.length) continue;
       if (tool.id === 'azure-monitor' || tool.id === 'azure-policy' || tool.id === 'csi-secret-store') continue;
-      selectedTools.push(tool);
+      if (tool.manualOnly) {
+        manualTools.push(tool);
+      } else {
+        selectedTools.push(tool);
+      }
     }
   }
 
-  if (selectedTools.length === 0) return '';
+  if (selectedTools.length === 0 && manualTools.length === 0) return '';
 
   var lines = [];
   lines.push('#!/usr/bin/env bash');
@@ -4545,55 +4552,83 @@ function generatePostDeployScript(s) {
   lines.push('echo ""');
   lines.push('');
 
-  // Step 3: Install ecosystem tools
-  lines.push('# -------------------------------------------------------');
-  lines.push('# Step 3: Install ecosystem tools');
-  lines.push('# -------------------------------------------------------');
-  lines.push('echo "==> [3/4] Installing ecosystem tools..."');
-  lines.push('echo ""');
-  lines.push('');
-
-  for (var si = 0; si < selectedTools.length; si++) {
-    var t = selectedTools[si];
-    var g = t.guidance;
-    lines.push('# --- ' + t.label + ' (' + t.deployType + ') ---');
-    lines.push('echo "    Installing ' + t.label + '..."');
-    for (var ci2 = 0; ci2 < g.commands.length; ci2++) {
-      var cmd = g.commands[ci2]
-        .replace(/<rg>/g, '$RG_NAME')
-        .replace(/<aks>/g, '$AKS_NAME')
-        .replace(/\{rgName\}/g, '$RG_NAME')
-        .replace(/\{aksName\}/g, '$AKS_NAME');
-      lines.push(cmd);
-    }
+  // Step 3: Install automatable ecosystem tools
+  if (selectedTools.length > 0) {
+    lines.push('# -------------------------------------------------------');
+    lines.push('# Step 3: Install ecosystem tools');
+    lines.push('# -------------------------------------------------------');
+    lines.push('echo "==> [3/4] Installing ecosystem tools..."');
     lines.push('echo ""');
     lines.push('');
-  }
 
-  // Step 4: Verify installations
-  lines.push('# -------------------------------------------------------');
-  lines.push('# Step 4: Verify installations');
-  lines.push('# -------------------------------------------------------');
-  lines.push('echo "==> [4/4] Verifying installations..."');
-  lines.push('echo ""');
-  lines.push('');
-
-  for (var vi = 0; vi < selectedTools.length; vi++) {
-    var vt = selectedTools[vi];
-    var vg = vt.guidance;
-    if (vg && vg.verifyCmd) {
-      var verifyCmd = vg.verifyCmd
-        .replace(/<rg>/g, '$RG_NAME')
-        .replace(/<aks>/g, '$AKS_NAME')
-        .replace(/\{rgName\}/g, '$RG_NAME')
-        .replace(/\{aksName\}/g, '$AKS_NAME');
-      lines.push('echo "    Verifying ' + vt.label + '..."');
-      lines.push(verifyCmd);
+    for (var si = 0; si < selectedTools.length; si++) {
+      var t = selectedTools[si];
+      var g = t.guidance;
+      lines.push('# --- ' + t.label + ' (' + t.deployType + ') ---');
+      lines.push('echo "    Installing ' + t.label + '..."');
+      for (var ci2 = 0; ci2 < g.commands.length; ci2++) {
+        var cmd = g.commands[ci2]
+          .replace(/<rg>/g, '$RG_NAME')
+          .replace(/<aks>/g, '$AKS_NAME')
+          .replace(/\{rgName\}/g, '$RG_NAME')
+          .replace(/\{aksName\}/g, '$AKS_NAME');
+        lines.push(cmd);
+      }
       lines.push('echo ""');
+      lines.push('');
     }
+
+    // Step 4: Verify installations
+    lines.push('# -------------------------------------------------------');
+    lines.push('# Step 4: Verify installations');
+    lines.push('# -------------------------------------------------------');
+    lines.push('echo "==> [4/4] Verifying installations..."');
+    lines.push('echo ""');
+    lines.push('');
+
+    for (var vi = 0; vi < selectedTools.length; vi++) {
+      var vt = selectedTools[vi];
+      var vg = vt.guidance;
+      if (vg && vg.verifyCmd) {
+        var verifyCmd = vg.verifyCmd
+          .replace(/<rg>/g, '$RG_NAME')
+          .replace(/<aks>/g, '$AKS_NAME')
+          .replace(/\{rgName\}/g, '$RG_NAME')
+          .replace(/\{aksName\}/g, '$AKS_NAME');
+        lines.push('echo "    Verifying ' + vt.label + '..."');
+        lines.push(verifyCmd);
+        lines.push('echo ""');
+      }
+    }
+
+    lines.push('echo "==> Automated tools installed. Verify with: kubectl get pods --all-namespaces"');
+  } else {
+    lines.push('echo "==> No automatable tools selected. See manual steps below."');
   }
 
-  lines.push('echo "==> All ecosystem tools installed. Verify with: kubectl get pods --all-namespaces"');
+  // Manual-only tools: emit as comments with instructions
+  if (manualTools.length > 0) {
+    lines.push('');
+    lines.push('echo ""');
+    lines.push('echo "==> The following tools require manual configuration before running:"');
+    for (var mi = 0; mi < manualTools.length; mi++) {
+      var mt = manualTools[mi];
+      var mg = mt.guidance;
+      lines.push('echo ""');
+      lines.push('echo "  ' + mt.label + ' (' + mt.deployType + ')"');
+      if (mg && mg.note) {
+        lines.push('echo "    ' + mg.note.replace(/"/g, '\\"') + '"');
+      }
+      lines.push('echo "    Starter command (edit before running):"');
+      for (var mci = 0; mci < mg.commands.length; mci++) {
+        var mcmd = mg.commands[mci]
+          .replace(/<rg>/g, '$RG_NAME')
+          .replace(/<aks>/g, '$AKS_NAME');
+        lines.push('echo "    ' + mcmd.replace(/"/g, '\\"') + '"');
+      }
+    }
+    lines.push('echo ""');
+  }
   lines.push('');
 
   return lines.join('\n');
@@ -4655,6 +4690,21 @@ function generateDeploymentGuide(s) {
   lines.push('./deploy.sh');
   lines.push('```');
   lines.push('');
+
+  // Check if post-deploy-tools.sh will be generated
+  var guidePostDeploy = generatePostDeployScript(s);
+  if (guidePostDeploy) {
+    lines.push('After the infrastructure deployment completes, install selected ecosystem tools:');
+    lines.push('');
+    lines.push('```bash');
+    lines.push('chmod +x post-deploy-tools.sh');
+    lines.push('./post-deploy-tools.sh');
+    lines.push('```');
+    lines.push('');
+    lines.push('The script polls until the AKS deployment succeeds, gets cluster credentials, and installs each tool automatically. Tools that require manual configuration (custom subnet CIDRs, Git repo URLs) are printed as starter commands instead of running directly.');
+    lines.push('');
+  }
+
   lines.push('Or deploy manually:');
   lines.push('');
   lines.push('```bash');
@@ -5088,6 +5138,7 @@ window.__TEST__ = {
   generateBicepParam: generateBicepParam,
   generateDeploymentGuide: generateDeploymentGuide,
   generateDeployScript: generateDeployScript,
+  generatePostDeployScript: generatePostDeployScript,
   validateStep: validateStep,
   validateAllSteps: validateAllSteps,
   initState: initState,

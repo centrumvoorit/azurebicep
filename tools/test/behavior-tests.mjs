@@ -405,6 +405,80 @@ console.log('16. validateAllSteps aggregates all steps');
 }
 
 // ----------------------------------------------------------
+// 17. manualOnly tools excluded from post-deploy automation
+// ----------------------------------------------------------
+console.log('17. manualOnly tools excluded from post-deploy automation');
+{
+  const dom = createDom();
+  const T = dom.window.__TEST__;
+
+  // AGIC and Flux are manualOnly — should not appear as executable commands
+  const script = T.generatePostDeployScript({
+    customerName: 'testco', environment: 'dev', location: 'westeurope',
+    ecosystemTools: { agic: true, flux: true, nginx: true },
+  });
+
+  // nginx is automatable — should have its install commands
+  assert(script.includes('ingress-nginx'), 'Post-deploy should install nginx');
+
+  // AGIC and Flux should NOT be executed — only printed via echo
+  const execLines = script.split('\n').filter(l => !l.startsWith('echo ') && !l.startsWith('#'));
+  const execBlock = execLines.join('\n');
+  assert(!execBlock.includes('ingress-appgw'), 'Post-deploy should NOT execute AGIC command');
+  assert(!execBlock.includes('flux create'), 'Post-deploy should NOT execute Flux command');
+
+  // But they should be mentioned as manual steps
+  assert(script.includes('AGIC'), 'Post-deploy should mention AGIC as manual');
+  assert(script.includes('Flux'), 'Post-deploy should mention Flux as manual');
+  assert(script.includes('manual configuration'), 'Post-deploy should explain manual tools');
+
+  dom.window.close();
+}
+
+// ----------------------------------------------------------
+// 18. Post-deploy script empty when only Bicep-native tools selected
+// ----------------------------------------------------------
+console.log('18. Post-deploy script empty for Bicep-native tools only');
+{
+  const dom = createDom();
+  const T = dom.window.__TEST__;
+
+  const script = T.generatePostDeployScript({
+    customerName: 'testco', environment: 'dev', location: 'westeurope',
+    ecosystemTools: { 'azure-monitor': true, 'azure-policy': true, 'csi-secret-store': true },
+  });
+  assert(script === '', 'Post-deploy should be empty when only Bicep-native tools selected');
+
+  dom.window.close();
+}
+
+// ----------------------------------------------------------
+// 19. Deploy script always uses --no-wait
+// ----------------------------------------------------------
+console.log('19. Deploy script always uses --no-wait');
+{
+  const dom = createDom();
+  const T = dom.window.__TEST__;
+
+  // With ecosystem tools
+  const s1 = T.generateDeployScript({
+    customerName: 'testco', environment: 'dev', location: 'westeurope',
+    ecosystemTools: { nginx: true, 'kube-prometheus-stack': true },
+  });
+  assert(s1.includes('--no-wait'), 'Deploy script should use --no-wait even with ecosystem tools');
+  assert(!s1.includes('get-credentials'), 'Deploy script should NOT get kubeconfig');
+
+  // Without ecosystem tools
+  const s2 = T.generateDeployScript({
+    customerName: 'testco', environment: 'dev', location: 'westeurope',
+    ecosystemTools: {},
+  });
+  assert(s2.includes('--no-wait'), 'Deploy script should use --no-wait without ecosystem tools');
+
+  dom.window.close();
+}
+
+// ----------------------------------------------------------
 // Summary
 // ----------------------------------------------------------
 console.log('\n' + '='.repeat(50));
