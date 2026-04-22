@@ -97,6 +97,8 @@ const REGIONS = [
   'uksouth', 'ukwest', 'germanywestcentral', 'swedencentral', 'norwayeast', 'francecentral'
 ];
 
+const REGIONS_WITHOUT_ZONES = ['ukwest'];
+
 const K8S_VERSIONS = ['1.33', '1.34', '1.35'];
 
 const UPGRADE_CHANNELS = ['none', 'patch', 'stable', 'rapid', 'node-image'];
@@ -291,22 +293,24 @@ const ECOSYSTEM_TOOLS = {
         id: 'linkerd',
         label: 'Linkerd',
         description: 'Lightweight, ultrafast service mesh focused on simplicity and performance.',
-        deployType: 'Helm install',
+        deployType: 'CLI install',
         requirements: function(state) {
           var vcpu = getVmVcpu(state.userNodeVmSize ? state.userNodeVmSize.value : 'Standard_D4s_v5');
           return vcpu < 2 ? ['Requires at least 2 vCPU on user nodes'] : [];
         },
         conflicts: ['istio'],
+        manualOnly: true,
         guidance: {
-          helmRepo: 'https://helm.linkerd.io/stable',
-          chart: 'linkerd-control-plane',
           namespace: 'linkerd',
           commands: [
             'curl -sL https://run.linkerd.io/install | sh',
+            'export PATH=$HOME/.linkerd2/bin:$PATH',
+            'linkerd check --pre',
+            'linkerd install --crds | kubectl apply -f -',
             'linkerd install | kubectl apply -f -'
           ],
           verifyCmd: 'linkerd check',
-          note: 'Cannot be combined with Istio.'
+          note: 'Cannot be combined with Istio. Requires the Linkerd CLI on PATH and a preflight check before installing CRDs and control plane.'
         }
       }
     ]
@@ -338,10 +342,11 @@ const ECOSYSTEM_TOOLS = {
         description: 'Azure Application Gateway Ingress Controller with WAF and SSL termination.',
         deployType: 'AKS add-on',
         requirements: function() { return []; },
+        manualOnly: true,
         guidance: {
-          commands: ['az aks enable-addons -g <rg> -n <aks> --addons ingress-appgw --appgw-subnet-cidr 10.x.18.0/24'],
+          commands: ['az aks enable-addons -g <rg> -n <aks> --addons ingress-appgw --appgw-subnet-cidr <YOUR_APPGW_SUBNET_CIDR>'],
           verifyCmd: 'kubectl get pods -n kube-system -l app=ingress-appgw',
-          note: 'Requires a dedicated subnet for Application Gateway.'
+          note: 'Requires a dedicated subnet for Application Gateway. Replace <YOUR_APPGW_SUBNET_CIDR> with an unused /24 in your VNet.'
         }
       },
       {
@@ -419,10 +424,11 @@ const ECOSYSTEM_TOOLS = {
         deployType: 'AKS add-on',
         requirements: function() { return []; },
         conflicts: ['argocd'],
+        manualOnly: true,
         guidance: {
-          commands: ['az k8s-configuration flux create -g <rg> -c <aks> -n gitops --namespace flux-system -t managedClusters --scope cluster -u <git-repo>'],
+          commands: ['az k8s-configuration flux create -g <rg> -c <aks> -n gitops --namespace flux-system -t managedClusters --scope cluster -u <YOUR_GIT_REPO_URL>'],
           verifyCmd: 'az k8s-configuration flux list -g <rg> -c <aks> -t managedClusters',
-          note: 'Cannot be combined with ArgoCD. Azure-managed, no Helm needed.'
+          note: 'Cannot be combined with ArgoCD. Azure-managed, no Helm needed. Replace <YOUR_GIT_REPO_URL> with your Git repository URL.'
         }
       },
       {
@@ -2131,6 +2137,12 @@ function setValNow(key, value) {
   else if (typeof value === 'object' && value !== null) value = Object.assign({}, value);
   state[key].value = value;
   state[key]._edited = true;
+  // Private clusters cannot use authorizedIPRanges — clear stale values
+  if (key === 'enablePrivateCluster' && value === true) {
+    if (state.apiServerAuthorizedIPs) {
+      state.apiServerAuthorizedIPs.value = [];
+    }
+  }
   autoSave();
   if (_renderTimer) clearTimeout(_renderTimer);
   _renderTimer = null;
@@ -2240,6 +2252,21 @@ function validateStep(stepNum) {
     if (!getVal('location')) {
       result.errors.push('Region is required.');
     }
+    var step1Env = getVal('environment') || 'dev';
+    var step1Sku = getVal('skuTier') || (step1Env === 'dev' ? 'Free' : 'Standard');
+    if ((step1Env === 'acc' || step1Env === 'prod') && step1Sku === 'Free') {
+      result.warnings.push('Free tier has no SLA. Acc/prod environments should use Standard or Premium for uptime guarantees.');
+    }
+    var step1Zones = getVal('availabilityZones');
+    var step1Region = getVal('location') || '';
+    var step1RegionHasZones = REGIONS_WITHOUT_ZONES.indexOf(step1Region) === -1;
+    if ((step1Env === 'acc' || step1Env === 'prod') && (!step1Zones || step1Zones.length === 0)) {
+      if (step1RegionHasZones) {
+        result.warnings.push('No availability zones configured. Acc/prod environments should use zones [1,2,3] for zonal resilience.');
+      } else {
+        result.infos.push('Region ' + step1Region + ' does not support availability zones. Consider a zone-enabled region for production resilience.');
+      }
+    }
   }
   if (stepNum === 2) {
     var ids = getVal('adminGroupObjectIds') || [];
@@ -2261,13 +2288,13 @@ function validateStep(stepNum) {
         }
       }
     }
-    if (!getVal('tagCostCenter')) {
+    if (!(getVal('tagCostCenter') || '').trim()) {
       result.errors.push('Tag: CostCenter is required.');
     }
-    if (!getVal('tagOwner')) {
+    if (!(getVal('tagOwner') || '').trim()) {
       result.errors.push('Tag: Owner is required.');
     }
-    if (!getVal('tagProject')) {
+    if (!(getVal('tagProject') || '').trim()) {
       result.errors.push('Tag: Project is required.');
     }
   }
@@ -2298,8 +2325,31 @@ function validateStep(stepNum) {
 
     if (dnsIp && !/^\d+\.\d+\.\d+\.\d+$/.test(dnsIp)) {
       result.errors.push('DNS service IP is not a valid IP address.');
-    } else if (parseCIDR(svcCidr) && dnsIp && !isIPInCIDR(dnsIp, svcCidr)) {
-      result.errors.push('DNS service IP must be within the Service CIDR.');
+    } else if (dnsIp && parseCIDR(svcCidr)) {
+      if (!isIPInCIDR(dnsIp, svcCidr)) {
+        result.errors.push('DNS service IP must be within the Service CIDR.');
+      }
+      var dnsOctets = dnsIp.split('.').map(Number);
+      var svcRange = cidrRange(svcCidr);
+      if (svcRange) {
+        var dnsNum = ((dnsOctets[0] << 24) | (dnsOctets[1] << 16) | (dnsOctets[2] << 8) | dnsOctets[3]) >>> 0;
+        if (dnsNum === svcRange.start) {
+          result.errors.push('DNS service IP cannot be the network address of the Service CIDR (' + dnsIp + '). Use .10 or higher.');
+        } else if (dnsNum === svcRange.start + 1) {
+          result.warnings.push('DNS service IP is .1 of the Service CIDR — Azure reserves the first IP in some configurations. Default is .10.');
+        }
+      }
+    }
+
+    // Public cluster without IP restrictions
+    var step3Env = getVal('environment') || 'dev';
+    var step3Private = getVal('enablePrivateCluster');
+    if (!step3Private) {
+      var step3AuthIPs = getVal('apiServerAuthorizedIPs') || [];
+      var step3ValidIPs = step3AuthIPs.filter(function(ip) { return ip.trim() !== ''; });
+      if (step3ValidIPs.length === 0 && (step3Env === 'acc' || step3Env === 'prod')) {
+        result.warnings.push('Public cluster with no API server IP restrictions — the Kubernetes API is reachable from the entire internet. Add authorized IP ranges or switch to Private.');
+      }
     }
 
     // Capacity warning: estimate required IPs for AKS subnet
@@ -2372,6 +2422,14 @@ function validateStep(stepNum) {
         result.errors.push('User pool node count must be at least 1.');
       }
     }
+
+    // vCPU quota estimate
+    var sysVmVcpu = getVmVcpu(getVal('systemNodeVmSize') || 'Standard_D2s_v5');
+    var usrVmVcpu = getVmVcpu(getVal('userNodeVmSize') || 'Standard_D4s_v5');
+    var sysMaxN = sysAuto ? (getVal('systemNodeMaxCount') || 3) : (getVal('systemNodeCount') || 3);
+    var usrMaxN = userAuto ? (getVal('userNodeMaxCount') || 3) : (getVal('userNodeCount') || 3);
+    var totalVcpu = (sysMaxN * sysVmVcpu) + (usrMaxN * usrVmVcpu);
+    result.infos.push('Estimated max vCPU usage: ' + totalVcpu + ' vCPUs (' + sysMaxN + 'x' + sysVmVcpu + ' system + ' + usrMaxN + 'x' + usrVmVcpu + ' user). Verify against your subscription quota: az vm list-usage --location {region} -o table');
   }
   if (stepNum === 5) {
     var privateCluster = getVal('enablePrivateCluster');
@@ -2747,6 +2805,15 @@ function warningsHtml(warnings) {
     '<ul class="text-sm text-yellow-600 list-disc list-inside">' + items + '</ul></div>';
 }
 
+function infosHtml(infos) {
+  if (!infos.length) return '';
+  var items = '';
+  for (var i = 0; i < infos.length; i++) items += '<li>' + infos[i] + '</li>';
+  return '<div class="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-3">' +
+    '<h4 class="text-sm font-semibold text-blue-700 mb-1">Info</h4>' +
+    '<ul class="text-sm text-blue-600 list-disc list-inside">' + items + '</ul></div>';
+}
+
 function infoPanel(text) {
   return '<div class="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-700">' + text + '</div>';
 }
@@ -2893,7 +2960,8 @@ function renderStep1() {
       'params', 'AKS-supported Kubernetes version.') +
 
     errorsHtml(validation.errors) +
-    warningsHtml(validation.warnings);
+    warningsHtml(validation.warnings) +
+    infosHtml(validation.infos);
 }
 
 function renderStep2() {
@@ -3407,7 +3475,8 @@ function renderStep4() {
     '</details>' +
 
     errorsHtml(validation.errors) +
-    warningsHtml(validation.warnings);
+    warningsHtml(validation.warnings) +
+    infosHtml(validation.infos);
 }
 function toggleZone(zone) {
   var zones = (getVal('availabilityZones') || []).slice();
@@ -3575,7 +3644,7 @@ function renderStep6() {
 
   var html = '<h2 class="text-xl font-bold text-gray-800 mb-1">Step 6: Ecosystem Tools</h2>' +
     '<p class="text-sm text-gray-500 mb-4">Select tools to include in your deployment guide.</p>' +
-    infoPanel('Select the tools to include in your deployment guide. Starter Helm commands and configuration guidance will be generated for each selected tool.') +
+    infoPanel('Select the tools to include in your deployment guide. Install commands and configuration guidance will be generated for each selected tool.') +
     '<div class="mt-6"></div>';
 
   var catKeys = Object.keys(ECOSYSTEM_TOOLS);
@@ -3639,6 +3708,7 @@ function renderStep6() {
   }
 
   html += warningsHtml(validation.warnings);
+  html += infosHtml(validation.infos);
 
   return html;
 }
@@ -3674,6 +3744,45 @@ function renderDeployGuidePanel(s) {
       'chmod +x deploy.sh\n' +
       './deploy.sh') +
     '</div></div>';
+
+  // --- Count automatable vs manual-only ecosystem tools for panel text ---
+  var panelAutoCount = 0;
+  var panelManualCount = 0;
+  var panelBicepNative = { 'azure-monitor': 1, 'azure-policy': 1, 'csi-secret-store': 1 };
+  var panelEcoTools = s.ecosystemTools || {};
+  var panelCatKeys = Object.keys(ECOSYSTEM_TOOLS);
+  for (var pci = 0; pci < panelCatKeys.length; pci++) {
+    var pCatTools = ECOSYSTEM_TOOLS[panelCatKeys[pci]].tools;
+    for (var pti = 0; pti < pCatTools.length; pti++) {
+      var pt = pCatTools[pti];
+      if (!panelEcoTools[pt.id] || panelBicepNative[pt.id]) continue;
+      if (!pt.guidance || !pt.guidance.commands || !pt.guidance.commands.length) continue;
+      if (pt.manualOnly) { panelManualCount++; } else { panelAutoCount++; }
+    }
+  }
+
+  // --- Post-deploy tools note (only when ecosystem tools are selected) ---
+  var hasPostDeployTools = generatePostDeployScript(s) !== '';
+  if (hasPostDeployTools) {
+    var panelDesc;
+    if (panelAutoCount > 0 && panelManualCount > 0) {
+      panelDesc = 'After deploy.sh completes, run post-deploy-tools.sh. It polls until the deployment succeeds, installs automatable tools, and prints starter commands for tools that require manual configuration.';
+    } else if (panelAutoCount > 0) {
+      panelDesc = 'After deploy.sh completes, run post-deploy-tools.sh to install selected ecosystem tools. It polls until the deployment succeeds, then installs and verifies each tool.';
+    } else {
+      panelDesc = 'After deploy.sh completes, run post-deploy-tools.sh to get cluster credentials. Selected tools require manual configuration — the script prints starter commands to review and edit before running.';
+    }
+    html += '<div class="border border-blue-200 rounded-lg mb-4">' +
+      '<div class="px-4 py-3 bg-blue-50 border-b border-blue-200 rounded-t-lg">' +
+        '<h4 class="text-sm font-semibold text-blue-700">Post-Deploy: Ecosystem Tools</h4>' +
+        '<p class="text-xs text-blue-600 mt-1">' + panelDesc + '</p>' +
+      '</div>' +
+      '<div class="p-4">' +
+      copyableBlock('post-deploy-script',
+        'chmod +x post-deploy-tools.sh\n' +
+        './post-deploy-tools.sh') +
+      '</div></div>';
+  }
 
   // --- Manual Deploy (no deploy.sh) ---
   html += '<div class="border border-gray-200 rounded-lg mb-4">' +
@@ -3787,10 +3896,13 @@ function renderDeployGuidePanel(s) {
     }
   }
   if (toolCards) {
+    var cardSubtext = (panelAutoCount > 0)
+      ? 'Install commands for selected tools. Run after cluster is ready.'
+      : 'Starter commands for selected tools. Review and edit before running.';
     html += '<div class="border border-gray-200 rounded-lg mb-4">' +
       '<div class="px-4 py-3 bg-gray-50 border-b border-gray-200 rounded-t-lg">' +
         '<h4 class="text-sm font-semibold text-gray-700">Post-Deploy: Ecosystem Tools</h4>' +
-        '<p class="text-xs text-gray-500 mt-1">Install commands for selected tools. Run after cluster is ready.</p>' +
+        '<p class="text-xs text-gray-500 mt-1">' + cardSubtext + '</p>' +
       '</div>' +
       '<div class="p-4">' + toolCards + '</div></div>';
   }
@@ -3853,6 +3965,15 @@ function renderStep7() {
     html += '<div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3">' +
       '<h4 class="text-sm font-semibold text-yellow-700 mb-1">Warnings</h4>' +
       '<ul class="text-sm text-yellow-600 list-disc list-inside">' + warnItems + '</ul></div>';
+  }
+  if (validation.infos.length > 0) {
+    var infoItems = '';
+    for (var i = 0; i < validation.infos.length; i++) {
+      infoItems += '<li>' + escapeHtml(validation.infos[i]) + '</li>';
+    }
+    html += '<div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">' +
+      '<h4 class="text-sm font-semibold text-blue-700 mb-1">Info</h4>' +
+      '<ul class="text-sm text-blue-600 list-disc list-inside">' + infoItems + '</ul></div>';
   }
   if (validation.errors.length === 0 && validation.warnings.length === 0) {
     html += '<div class="bg-green-50 border border-green-200 rounded-lg p-3 mb-3">' +
@@ -4142,6 +4263,8 @@ function generateBicepParam(s) {
 
   var zones = Array.isArray(s.availabilityZones) ? s.availabilityZones : [];
   var authIPs = Array.isArray(s.apiServerAuthorizedIPs) ? s.apiServerAuthorizedIPs : [];
+  // Private clusters cannot use authorizedIPRanges — force empty
+  if (s.enablePrivateCluster) authIPs = [];
 
   lines.push('param aksConfig = {');
   lines.push('  kubernetesVersion: ' + bicepString(s.kubernetesVersion || '1.35'));
@@ -4159,7 +4282,7 @@ function generateBicepParam(s) {
   lines.push('  skuTier: ' + bicepString(s.skuTier || (s.environment === 'dev' ? 'Free' : 'Standard')));
   lines.push('  upgradeChannel: ' + bicepString(s.upgradeChannel || 'patch'));
   lines.push('  nodeOSUpgradeChannel: ' + bicepString(s.nodeOSUpgradeChannel || 'NodeImage'));
-  lines.push('  osDiskType: ' + bicepString(s.osDiskType || 'Ephemeral'));
+  lines.push('  osDiskType: ' + bicepString(s.osDiskType || 'Managed'));
   lines.push('  osDiskSizeGB: ' + (s.osDiskSizeGB || 30));
   lines.push('  maxPodsPerNode: ' + (s.maxPodsPerNode || 50));
   if (s.environment === 'prod' || s.environment === 'acc') {
@@ -4255,6 +4378,27 @@ function generateDeployScript(s) {
     lines.push('  "' + providers[i] + '"');
   }
   lines.push(')');
+  lines.push('');
+
+  // --- Step 0: Verify subscription ---
+  lines.push('# -------------------------------------------------------');
+  lines.push('# Step 0: Verify Azure subscription');
+  lines.push('# -------------------------------------------------------');
+  lines.push('echo "==> [0/4] Verifying Azure subscription..."');
+  lines.push('SUB_NAME=$(az account show --query name -o tsv 2>/dev/null)');
+  lines.push('SUB_ID=$(az account show --query id -o tsv 2>/dev/null)');
+  lines.push('if [ -z "$SUB_ID" ]; then');
+  lines.push('  echo "    ERROR: Not logged in. Run: az login"');
+  lines.push('  exit 1');
+  lines.push('fi');
+  lines.push('echo "    Subscription: $SUB_NAME ($SUB_ID)"');
+  lines.push('echo ""');
+  lines.push('read -rp "Correct subscription? [Y/n] " sub_confirm');
+  lines.push('if [[ "$sub_confirm" =~ ^[Nn]$ ]]; then');
+  lines.push('  echo "    Switch with: az account set --subscription <name-or-id>"');
+  lines.push('  exit 0');
+  lines.push('fi');
+  lines.push('echo ""');
   lines.push('');
 
   // --- Step 1: Resource providers ---
@@ -4354,6 +4498,188 @@ function generateDeployScript(s) {
   return lines.join('\n');
 }
 
+function generatePostDeployScript(s) {
+  var env = s.environment || 'dev';
+  var region = s.location || 'westeurope';
+  var rgName = 'rg-' + (s.customerName || 'deploy') + '-' + env + '-' + region;
+  var aksName = 'aks-' + (s.customerName || 'deploy') + '-' + env;
+  var deployName = 'aks-' + (s.customerName || 'deploy') + '-' + env;
+
+  // Collect selected ecosystem tools (skip Bicep-native ones)
+  var ecoTools = s.ecosystemTools || {};
+  var selectedTools = [];
+  var manualTools = [];
+  var catKeys = Object.keys(ECOSYSTEM_TOOLS);
+  for (var ci = 0; ci < catKeys.length; ci++) {
+    var catTools = ECOSYSTEM_TOOLS[catKeys[ci]].tools;
+    for (var ti = 0; ti < catTools.length; ti++) {
+      var tool = catTools[ti];
+      if (!ecoTools[tool.id]) continue;
+      if (!tool.guidance || !tool.guidance.commands || !tool.guidance.commands.length) continue;
+      if (tool.id === 'azure-monitor' || tool.id === 'azure-policy' || tool.id === 'csi-secret-store') continue;
+      if (tool.manualOnly) {
+        manualTools.push(tool);
+      } else {
+        selectedTools.push(tool);
+      }
+    }
+  }
+
+  if (selectedTools.length === 0 && manualTools.length === 0) return '';
+
+  var lines = [];
+  lines.push('#!/usr/bin/env bash');
+  lines.push('set -euo pipefail');
+  lines.push('');
+  lines.push('# -----------------------------------------------------------');
+  lines.push('# post-deploy-tools.sh — wait for deployment + install ecosystem tools');
+  lines.push('# Generated by AKS Configurator');
+  lines.push('# -----------------------------------------------------------');
+  lines.push('');
+  lines.push('RG_NAME="' + rgName + '"');
+  lines.push('AKS_NAME="' + aksName + '"');
+  lines.push('DEPLOY_NAME="' + deployName + '"');
+  lines.push('');
+
+  // Check if any automatable tool needs Helm
+  var postNeedsHelm = false;
+  for (var hi = 0; hi < selectedTools.length; hi++) {
+    if (selectedTools[hi].deployType === 'Helm install') {
+      postNeedsHelm = true;
+      break;
+    }
+  }
+  if (postNeedsHelm) {
+    lines.push('# Pre-check: Helm required');
+    lines.push('if ! command -v helm &>/dev/null; then');
+    lines.push('  echo "ERROR: helm is not installed. Install from https://helm.sh/docs/intro/install/"');
+    lines.push('  exit 1');
+    lines.push('fi');
+    lines.push('');
+  }
+
+  // Step 1: Poll deployment status
+  lines.push('# -------------------------------------------------------');
+  lines.push('# Step 1: Wait for deployment to succeed');
+  lines.push('# -------------------------------------------------------');
+  lines.push('echo "==> [1/4] Waiting for deployment $DEPLOY_NAME to complete..."');
+  lines.push('while true; do');
+  lines.push('  DEPLOY_STATE=$(az deployment sub show --name "$DEPLOY_NAME" --query properties.provisioningState -o tsv 2>/dev/null || echo "NotFound")');
+  lines.push('  case "$DEPLOY_STATE" in');
+  lines.push('    Succeeded)');
+  lines.push('      echo "    Deployment succeeded."');
+  lines.push('      break');
+  lines.push('      ;;');
+  lines.push('    Failed|Canceled)');
+  lines.push('      echo "    ERROR: Deployment finished with state: $DEPLOY_STATE"');
+  lines.push('      echo "    Run: az deployment operation sub list --name $DEPLOY_NAME --query \\"[?properties.provisioningState==\'Failed\']\\" -o json"');
+  lines.push('      exit 1');
+  lines.push('      ;;');
+  lines.push('    NotFound)');
+  lines.push('      echo "    ERROR: Deployment $DEPLOY_NAME not found. Run deploy.sh first."');
+  lines.push('      exit 1');
+  lines.push('      ;;');
+  lines.push('    *)');
+  lines.push('      echo "    Status: $DEPLOY_STATE — polling again in 30s..."');
+  lines.push('      sleep 30');
+  lines.push('      ;;');
+  lines.push('  esac');
+  lines.push('done');
+  lines.push('echo ""');
+  lines.push('');
+
+  // Step 2: Get AKS credentials
+  lines.push('# -------------------------------------------------------');
+  lines.push('# Step 2: Get AKS credentials');
+  lines.push('# -------------------------------------------------------');
+  lines.push('echo "==> [2/4] Getting AKS credentials..."');
+  lines.push('az aks get-credentials -g "$RG_NAME" -n "$AKS_NAME" --overwrite-existing');
+  lines.push('echo "    Connected to $AKS_NAME"');
+  lines.push('echo ""');
+  lines.push('');
+
+  // Step 3: Install automatable ecosystem tools
+  if (selectedTools.length > 0) {
+    lines.push('# -------------------------------------------------------');
+    lines.push('# Step 3: Install ecosystem tools');
+    lines.push('# -------------------------------------------------------');
+    lines.push('echo "==> [3/4] Installing ecosystem tools..."');
+    lines.push('echo ""');
+    lines.push('');
+
+    for (var si = 0; si < selectedTools.length; si++) {
+      var t = selectedTools[si];
+      var g = t.guidance;
+      lines.push('# --- ' + t.label + ' (' + t.deployType + ') ---');
+      lines.push('echo "    Installing ' + t.label + '..."');
+      for (var ci2 = 0; ci2 < g.commands.length; ci2++) {
+        var cmd = g.commands[ci2]
+          .replace(/<rg>/g, '$RG_NAME')
+          .replace(/<aks>/g, '$AKS_NAME')
+          .replace(/\{rgName\}/g, '$RG_NAME')
+          .replace(/\{aksName\}/g, '$AKS_NAME');
+        lines.push(cmd);
+      }
+      lines.push('echo ""');
+      lines.push('');
+    }
+
+    // Step 4: Verify installations
+    lines.push('# -------------------------------------------------------');
+    lines.push('# Step 4: Verify installations');
+    lines.push('# -------------------------------------------------------');
+    lines.push('echo "==> [4/4] Verifying installations..."');
+    lines.push('echo ""');
+    lines.push('');
+
+    for (var vi = 0; vi < selectedTools.length; vi++) {
+      var vt = selectedTools[vi];
+      var vg = vt.guidance;
+      if (vg && vg.verifyCmd) {
+        var verifyCmd = vg.verifyCmd
+          .replace(/<rg>/g, '$RG_NAME')
+          .replace(/<aks>/g, '$AKS_NAME')
+          .replace(/\{rgName\}/g, '$RG_NAME')
+          .replace(/\{aksName\}/g, '$AKS_NAME');
+        lines.push('echo "    Verifying ' + vt.label + '..."');
+        lines.push(verifyCmd);
+        lines.push('echo ""');
+      }
+    }
+
+    lines.push('echo "==> Automated tools installed. Verify with: kubectl get pods --all-namespaces"');
+  } else {
+    lines.push('echo "==> No automatable tools selected. See manual steps below."');
+  }
+
+  // Manual-only tools: emit as comments with instructions
+  if (manualTools.length > 0) {
+    lines.push('');
+    lines.push('echo ""');
+    lines.push('echo "==> The following tools require manual configuration before running:"');
+    for (var mi = 0; mi < manualTools.length; mi++) {
+      var mt = manualTools[mi];
+      var mg = mt.guidance;
+      lines.push('echo ""');
+      lines.push('echo "  ' + mt.label + ' (' + mt.deployType + ')"');
+      if (mg && mg.note) {
+        lines.push('echo "    ' + mg.note.replace(/"/g, '\\"') + '"');
+      }
+      lines.push('echo "    Starter command (edit before running):"');
+      for (var mci = 0; mci < mg.commands.length; mci++) {
+        var mcmd = mg.commands[mci]
+          .replace(/<rg>/g, '$RG_NAME')
+          .replace(/<aks>/g, '$AKS_NAME');
+        lines.push('echo "    ' + mcmd.replace(/"/g, '\\"') + '"');
+      }
+    }
+    lines.push('echo ""');
+  }
+  lines.push('');
+
+  return lines.join('\n');
+}
+
 function generateDeploymentGuide(s) {
   var rgName = 'rg-' + (s.customerName || '{name}') + '-' + (s.environment || '{env}') + '-' + (s.location || '{region}');
   var aksName = 'aks-' + (s.customerName || '{name}') + '-' + (s.environment || '{env}');
@@ -4394,6 +4720,25 @@ function generateDeploymentGuide(s) {
   lines.push('- Bicep CLI installed (`az bicep version`)');
   lines.push('- Sufficient permissions to create resources at subscription scope');
   lines.push('- `kubectl` installed for cluster management');
+
+  // Check if any selected non-manualOnly ecosystem tool uses Helm
+  var guideTools = s.ecosystemTools || {};
+  var guideNeedsHelm = false;
+  var guideCatKeys = Object.keys(ECOSYSTEM_TOOLS);
+  for (var gci = 0; gci < guideCatKeys.length; gci++) {
+    var gcTools = ECOSYSTEM_TOOLS[guideCatKeys[gci]].tools;
+    for (var gti = 0; gti < gcTools.length; gti++) {
+      if (guideTools[gcTools[gti].id] && gcTools[gti].deployType === 'Helm install' && !gcTools[gti].manualOnly) {
+        guideNeedsHelm = true;
+        break;
+      }
+    }
+    if (guideNeedsHelm) break;
+  }
+  if (guideNeedsHelm) {
+    lines.push('- Helm 3 installed (`helm version`) — required for selected ecosystem tools');
+  }
+
   if (s.enablePrivateCluster) {
     lines.push('- VPN or private network access to the VNet (private cluster)');
   }
@@ -4410,6 +4755,43 @@ function generateDeploymentGuide(s) {
   lines.push('./deploy.sh');
   lines.push('```');
   lines.push('');
+
+  // Check if post-deploy-tools.sh will be generated
+  var guidePostDeploy = generatePostDeployScript(s);
+  if (guidePostDeploy) {
+    lines.push('After the infrastructure deployment completes, run the post-deploy script:');
+    lines.push('');
+    lines.push('```bash');
+    lines.push('chmod +x post-deploy-tools.sh');
+    lines.push('./post-deploy-tools.sh');
+    lines.push('```');
+    lines.push('');
+    lines.push('The script polls until the AKS deployment succeeds and gets cluster credentials.');
+    // Count automatable vs manual-only to tailor the description
+    var guideAutoCount = 0;
+    var guideManualCount = 0;
+    var gdCatKeys = Object.keys(ECOSYSTEM_TOOLS);
+    var gdBicepNative = { 'azure-monitor': 1, 'azure-policy': 1, 'csi-secret-store': 1 };
+    var gdEcoTools = s.ecosystemTools || {};
+    for (var gdi = 0; gdi < gdCatKeys.length; gdi++) {
+      var gdCatTools = ECOSYSTEM_TOOLS[gdCatKeys[gdi]].tools;
+      for (var gdj = 0; gdj < gdCatTools.length; gdj++) {
+        var gdt = gdCatTools[gdj];
+        if (!gdEcoTools[gdt.id] || gdBicepNative[gdt.id]) continue;
+        if (!gdt.guidance || !gdt.guidance.commands || !gdt.guidance.commands.length) continue;
+        if (gdt.manualOnly) { guideManualCount++; } else { guideAutoCount++; }
+      }
+    }
+    if (guideAutoCount > 0 && guideManualCount > 0) {
+      lines.push('It installs automatable tools directly and prints starter commands for tools that require manual configuration (custom subnet CIDRs, Git repo URLs).');
+    } else if (guideAutoCount > 0) {
+      lines.push('It installs each selected tool automatically.');
+    } else {
+      lines.push('Selected tools require manual configuration — the script prints starter commands you should review and edit before running.');
+    }
+    lines.push('');
+  }
+
   lines.push('Or deploy manually:');
   lines.push('');
   lines.push('```bash');
@@ -4477,22 +4859,41 @@ function generateDeploymentGuide(s) {
   }
 
   // Ecosystem tools
+  var bicepNativeIds = { 'azure-monitor': 1, 'azure-policy': 1, 'csi-secret-store': 1 };
   var tools = s.ecosystemTools || {};
   var catKeys = Object.keys(ECOSYSTEM_TOOLS);
   var hasToolSection = false;
+  var hasBicepNativeSection = false;
+  var bicepNativeNames = [];
   for (var ci = 0; ci < catKeys.length; ci++) {
     var catTools = ECOSYSTEM_TOOLS[catKeys[ci]].tools;
     for (var ti = 0; ti < catTools.length; ti++) {
       var tool = catTools[ti];
       if (!tools[tool.id]) continue;
+
+      // Bicep-native tools: collect names, don't emit install commands
+      if (bicepNativeIds[tool.id]) {
+        bicepNativeNames.push(tool.label);
+        continue;
+      }
+
       if (!hasToolSection) {
         lines.push('## Ecosystem Tools');
         lines.push('');
+        var guidePostDeployCheck = generatePostDeployScript(s);
+        if (guidePostDeployCheck) {
+          if (guideAutoCount > 0) {
+            lines.push('Run `post-deploy-tools.sh` after deployment to install automatable tools. Tools marked *manual* require editing before running.');
+          } else {
+            lines.push('Run `post-deploy-tools.sh` after deployment to get cluster credentials and view starter commands for manual tools.');
+          }
+          lines.push('');
+        }
         hasToolSection = true;
       }
       var g = tool.guidance;
 
-      lines.push('### ' + tool.label);
+      lines.push('### ' + tool.label + (tool.manualOnly ? ' *(manual)*' : ''));
       lines.push('');
       lines.push(tool.description);
       lines.push('');
@@ -4525,10 +4926,21 @@ function generateDeploymentGuide(s) {
         lines.push('> ' + g.note);
         lines.push('');
       }
-
-      lines.push('*Starter commands -- review values for production use.*');
+    }
+  }
+  if (bicepNativeNames.length > 0) {
+    if (!hasToolSection) {
+      lines.push('## Ecosystem Tools');
       lines.push('');
     }
+    lines.push('### Already deployed via Bicep');
+    lines.push('');
+    lines.push('The following are enabled in the Bicep template and deploy automatically with the cluster — no post-deploy action needed:');
+    lines.push('');
+    for (var bni = 0; bni < bicepNativeNames.length; bni++) {
+      lines.push('- ' + bicepNativeNames[bni]);
+    }
+    lines.push('');
   }
 
   // Validation checklist
@@ -4577,6 +4989,12 @@ function downloadAllZip() {
 
   // Add the deploy script
   zip.file('infra/deploy.sh', generateDeployScript(s));
+
+  // Add the post-deploy tools script (only when ecosystem tools are selected)
+  var postDeployScript = generatePostDeployScript(s);
+  if (postDeployScript) {
+    zip.file('infra/post-deploy-tools.sh', postDeployScript);
+  }
 
   // Generate and download
   zip.generateAsync({ type: 'blob' }).then(function(blob) {
@@ -4832,8 +5250,25 @@ window.__TEST__ = {
   ENV_DEFAULTS: ENV_DEFAULTS,
   BICEP_TEMPLATES: BICEP_TEMPLATES,
   VM_SIZES: VM_SIZES,
+  ECOSYSTEM_TOOLS: ECOSYSTEM_TOOLS,
+  REGIONS_WITHOUT_ZONES: REGIONS_WITHOUT_ZONES,
   generateBicepParam: generateBicepParam,
   generateDeploymentGuide: generateDeploymentGuide,
+  generateDeployScript: generateDeployScript,
+  generatePostDeployScript: generatePostDeployScript,
+  validateStep: validateStep,
+  validateAllSteps: validateAllSteps,
+  initState: initState,
+  setValNow: setValNow,
+  setVal: setVal,
+  getVal: getVal,
+  getVmVcpu: getVmVcpu,
+  vmSupportsEphemeral: vmSupportsEphemeral,
+  getFlatState: getFlatState,
+  parseCIDR: parseCIDR,
+  isIPInCIDR: isIPInCIDR,
+  cidrsOverlap: cidrsOverlap,
+  isWithinCIDR: isWithinCIDR,
   SCHEMA_VERSION: SCHEMA_VERSION
 };
 
