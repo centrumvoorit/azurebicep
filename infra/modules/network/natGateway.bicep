@@ -30,7 +30,13 @@ resource publicIps 'Microsoft.Network/publicIPAddresses@2025-05-01' = [
     tags: tags
     sku: {
       name: 'Standard'
+      tier: 'Regional'
     }
+    zones: [
+      '1'
+      '2'
+      '3'
+    ]
     properties: {
       publicIPAllocationMethod: 'Static'
     }
