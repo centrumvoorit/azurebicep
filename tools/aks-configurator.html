@@ -4696,14 +4696,14 @@ function generateDeploymentGuide(s) {
   lines.push('- Sufficient permissions to create resources at subscription scope');
   lines.push('- `kubectl` installed for cluster management');
 
-  // Check if any selected ecosystem tool uses Helm
+  // Check if any selected non-manualOnly ecosystem tool uses Helm
   var guideTools = s.ecosystemTools || {};
   var guideNeedsHelm = false;
   var guideCatKeys = Object.keys(ECOSYSTEM_TOOLS);
   for (var gci = 0; gci < guideCatKeys.length; gci++) {
     var gcTools = ECOSYSTEM_TOOLS[guideCatKeys[gci]].tools;
     for (var gti = 0; gti < gcTools.length; gti++) {
-      if (guideTools[gcTools[gti].id] && gcTools[gti].deployType === 'Helm install') {
+      if (guideTools[gcTools[gti].id] && gcTools[gti].deployType === 'Helm install' && !gcTools[gti].manualOnly) {
         guideNeedsHelm = true;
         break;
       }
@@ -4734,14 +4734,36 @@ function generateDeploymentGuide(s) {
   // Check if post-deploy-tools.sh will be generated
   var guidePostDeploy = generatePostDeployScript(s);
   if (guidePostDeploy) {
-    lines.push('After the infrastructure deployment completes, install selected ecosystem tools:');
+    lines.push('After the infrastructure deployment completes, run the post-deploy script:');
     lines.push('');
     lines.push('```bash');
     lines.push('chmod +x post-deploy-tools.sh');
     lines.push('./post-deploy-tools.sh');
     lines.push('```');
     lines.push('');
-    lines.push('The script polls until the AKS deployment succeeds, gets cluster credentials, and installs each tool automatically. Tools that require manual configuration (custom subnet CIDRs, Git repo URLs) are printed as starter commands instead of running directly.');
+    lines.push('The script polls until the AKS deployment succeeds and gets cluster credentials.');
+    // Count automatable vs manual-only to tailor the description
+    var guideAutoCount = 0;
+    var guideManualCount = 0;
+    var gdCatKeys = Object.keys(ECOSYSTEM_TOOLS);
+    var gdBicepNative = { 'azure-monitor': 1, 'azure-policy': 1, 'csi-secret-store': 1 };
+    var gdEcoTools = s.ecosystemTools || {};
+    for (var gdi = 0; gdi < gdCatKeys.length; gdi++) {
+      var gdCatTools = ECOSYSTEM_TOOLS[gdCatKeys[gdi]].tools;
+      for (var gdj = 0; gdj < gdCatTools.length; gdj++) {
+        var gdt = gdCatTools[gdj];
+        if (!gdEcoTools[gdt.id] || gdBicepNative[gdt.id]) continue;
+        if (!gdt.guidance || !gdt.guidance.commands || !gdt.guidance.commands.length) continue;
+        if (gdt.manualOnly) { guideManualCount++; } else { guideAutoCount++; }
+      }
+    }
+    if (guideAutoCount > 0 && guideManualCount > 0) {
+      lines.push('It installs automatable tools directly and prints starter commands for tools that require manual configuration (custom subnet CIDRs, Git repo URLs).');
+    } else if (guideAutoCount > 0) {
+      lines.push('It installs each selected tool automatically.');
+    } else {
+      lines.push('Selected tools require manual configuration — the script prints starter commands you should review and edit before running.');
+    }
     lines.push('');
   }
 
@@ -4835,7 +4857,11 @@ function generateDeploymentGuide(s) {
         lines.push('');
         var guidePostDeployCheck = generatePostDeployScript(s);
         if (guidePostDeployCheck) {
-          lines.push('Run `post-deploy-tools.sh` after deployment to install automatable tools. Tools marked *manual* require editing before running.');
+          if (guideAutoCount > 0) {
+            lines.push('Run `post-deploy-tools.sh` after deployment to install automatable tools. Tools marked *manual* require editing before running.');
+          } else {
+            lines.push('Run `post-deploy-tools.sh` after deployment to get cluster credentials and view starter commands for manual tools.');
+          }
           lines.push('');
         }
         hasToolSection = true;

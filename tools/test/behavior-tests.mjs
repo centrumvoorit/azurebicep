@@ -561,8 +561,8 @@ console.log('23. Bicep-native tools excluded from guide install commands');
   });
 
   // Should NOT have fenced install commands for Bicep-native tools
-  assert(!guide.includes('az aks enable-addons -g testco-dev -n testco-dev --addons azure-policy'), 'Guide should NOT show azure-policy install command');
-  assert(!guide.includes('az aks enable-addons -g testco-dev -n testco-dev --addons azure-keyvault'), 'Guide should NOT show CSI install command');
+  assert(!guide.includes('az aks enable-addons -g rg-testco-dev-westeurope -n aks-testco-dev --addons azure-policy'), 'Guide should NOT show azure-policy install command');
+  assert(!guide.includes('az aks enable-addons -g rg-testco-dev-westeurope -n aks-testco-dev --addons azure-keyvault'), 'Guide should NOT show CSI install command');
 
   // Should have a "deployed via Bicep" note
   assert(guide.includes('Already deployed via Bicep'), 'Guide should have Bicep-native section');
@@ -572,6 +572,40 @@ console.log('23. Bicep-native tools excluded from guide install commands');
   // nginx should still be shown
   assert(guide.includes('NGINX'), 'Guide should still show nginx install commands');
 
+  dom.window.close();
+}
+
+// ----------------------------------------------------------
+// 24. Linkerd-only does not add Helm prerequisite to guide
+// ----------------------------------------------------------
+console.log('24. Linkerd-only does not add Helm prerequisite to guide');
+{
+  const dom = createDom();
+  const T = dom.window.__TEST__;
+
+  const guide = T.generateDeploymentGuide({
+    customerName: 'testco', environment: 'dev', location: 'westeurope',
+    ecosystemTools: { linkerd: true },
+  });
+  assert(!guide.includes('Helm 3'), 'Guide should NOT list Helm for Linkerd-only (manualOnly tool)');
+  dom.window.close();
+}
+
+// ----------------------------------------------------------
+// 25. Manual-only tools adapt guide language
+// ----------------------------------------------------------
+console.log('25. Manual-only tools adapt guide language');
+{
+  const dom = createDom();
+  const T = dom.window.__TEST__;
+
+  const guide = T.generateDeploymentGuide({
+    customerName: 'testco', environment: 'dev', location: 'westeurope',
+    ecosystemTools: { linkerd: true },
+  });
+  assert(!guide.includes('installs each tool automatically'), 'Guide should NOT say "installs automatically" for manual-only');
+  assert(!guide.includes('install automatable tools'), 'Guide should NOT say "install automatable tools" for manual-only');
+  assert(guide.includes('starter commands'), 'Guide should mention starter commands for manual-only');
   dom.window.close();
 }
 
