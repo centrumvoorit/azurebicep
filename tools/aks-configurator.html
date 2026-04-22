@@ -4400,16 +4400,96 @@ function generateDeployScript(s) {
   lines.push('echo "    Parameters: $PARAM_FILE"');
   lines.push('echo ""');
   lines.push('');
-  lines.push('az deployment sub create \\');
-  lines.push('  --name "$DEPLOY_NAME" \\');
-  lines.push('  --location "$LOCATION" \\');
-  lines.push('  --template-file main.bicep \\');
-  lines.push('  --parameters "$PARAM_FILE" \\');
-  lines.push('  --no-wait');
+  // Collect selected ecosystem tools
+  var ecoTools = s.ecosystemTools || {};
+  var selectedTools = [];
+  var catKeys = Object.keys(ECOSYSTEM_TOOLS);
+  for (var ci = 0; ci < catKeys.length; ci++) {
+    var catTools = ECOSYSTEM_TOOLS[catKeys[ci]].tools;
+    for (var ti = 0; ti < catTools.length; ti++) {
+      var tool = catTools[ti];
+      if (!ecoTools[tool.id]) continue;
+      if (!tool.guidance || !tool.guidance.commands || !tool.guidance.commands.length) continue;
+      // Skip tools that are already part of the Bicep template
+      if (tool.id === 'azure-monitor' || tool.id === 'azure-policy' || tool.id === 'csi-secret-store') continue;
+      selectedTools.push(tool);
+    }
+  }
+  var hasPostDeploy = selectedTools.length > 0;
+
+  if (hasPostDeploy) {
+    lines.push('az deployment sub create \\');
+    lines.push('  --name "$DEPLOY_NAME" \\');
+    lines.push('  --location "$LOCATION" \\');
+    lines.push('  --template-file main.bicep \\');
+    lines.push('  --parameters "$PARAM_FILE"');
+  } else {
+    lines.push('az deployment sub create \\');
+    lines.push('  --name "$DEPLOY_NAME" \\');
+    lines.push('  --location "$LOCATION" \\');
+    lines.push('  --template-file main.bicep \\');
+    lines.push('  --parameters "$PARAM_FILE" \\');
+    lines.push('  --no-wait');
+  }
   lines.push('');
-  lines.push('echo ""');
-  lines.push('echo "==> Deployment submitted (--no-wait). Monitor with:"');
-  lines.push('echo "    az deployment sub show --name $DEPLOY_NAME --query properties.provisioningState -o tsv"');
+
+  if (hasPostDeploy) {
+    var aksName = 'aks-' + (s.customerName || 'deploy') + '-' + env;
+
+    lines.push('DEPLOY_STATE=$(az deployment sub show --name "$DEPLOY_NAME" --query properties.provisioningState -o tsv 2>/dev/null)');
+    lines.push('if [ "$DEPLOY_STATE" != "Succeeded" ]; then');
+    lines.push('  echo ""');
+    lines.push('  echo "    ERROR: Deployment finished with state: $DEPLOY_STATE"');
+    lines.push('  echo "    Skipping post-deploy steps."');
+    lines.push('  exit 1');
+    lines.push('fi');
+    lines.push('');
+
+    lines.push('# -------------------------------------------------------');
+    lines.push('# Step 5: Post-deploy — ecosystem tools');
+    lines.push('# -------------------------------------------------------');
+    lines.push('echo ""');
+    lines.push('echo "==> [5/5] Deployment succeeded. Installing ecosystem tools..."');
+    lines.push('echo ""');
+    lines.push('');
+
+    // Get credentials
+    lines.push('AKS_NAME="' + aksName + '"');
+    lines.push('echo "    Getting AKS credentials..."');
+    lines.push('az aks get-credentials -g "$RG_NAME" -n "$AKS_NAME" --overwrite-existing');
+    lines.push('echo ""');
+    lines.push('');
+
+    for (var si = 0; si < selectedTools.length; si++) {
+      var t = selectedTools[si];
+      var g = t.guidance;
+      lines.push('# --- ' + t.label + ' (' + t.deployType + ') ---');
+      lines.push('echo "    Installing ' + t.label + '..."');
+      for (var ci2 = 0; ci2 < g.commands.length; ci2++) {
+        var cmd = g.commands[ci2]
+          .replace(/<rg>/g, '$RG_NAME')
+          .replace(/<aks>/g, '$AKS_NAME')
+          .replace(/\{rgName\}/g, '$RG_NAME')
+          .replace(/\{aksName\}/g, '$AKS_NAME');
+        lines.push(cmd);
+      }
+      if (g.verifyCmd) {
+        var verifyCmd = g.verifyCmd
+          .replace(/<rg>/g, '$RG_NAME')
+          .replace(/<aks>/g, '$AKS_NAME');
+        lines.push('echo "    Verifying ' + t.label + '..."');
+        lines.push(verifyCmd);
+      }
+      lines.push('echo ""');
+      lines.push('');
+    }
+
+    lines.push('echo "==> All ecosystem tools installed. Verify with: kubectl get pods --all-namespaces"');
+  } else {
+    lines.push('echo ""');
+    lines.push('echo "==> Deployment submitted (--no-wait). Monitor with:"');
+    lines.push('echo "    az deployment sub show --name $DEPLOY_NAME --query properties.provisioningState -o tsv"');
+  }
   lines.push('');
 
   return lines.join('\n');
