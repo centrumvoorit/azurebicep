@@ -663,6 +663,69 @@ console.log('27. Ecosystem tool plan detects bicep-native-only mode');
 }
 
 // ----------------------------------------------------------
+// 28. Manual-only copy stays aligned across UI and guide
+// ----------------------------------------------------------
+console.log('28. Manual-only copy stays aligned across UI and guide');
+{
+  const dom = createDom();
+  const T = dom.window.__TEST__;
+
+  T.initState('dev');
+  T.setValNow('ecosystemTools', { linkerd: true });
+
+  const step6 = T.renderStep6();
+  const panel = T.renderDeployGuidePanel(T.getFlatState());
+  const guide = T.generateDeploymentGuide(T.getFlatState());
+
+  assert(step6.includes('starter commands'), 'Step 6 should mention starter commands for manual-only');
+  assert(panel.includes('manual configuration'), 'Step 7 panel should mention manual configuration');
+  assert(panel.includes('starter commands'), 'Step 7 panel should mention starter commands');
+  assert(guide.includes('starter commands'), 'Guide should mention starter commands for manual-only');
+
+  dom.window.close();
+}
+
+// ----------------------------------------------------------
+// 29. Bicep-native-only selection omits post-deploy UI
+// ----------------------------------------------------------
+console.log('29. Bicep-native-only selection omits post-deploy UI');
+{
+  const dom = createDom();
+  const T = dom.window.__TEST__;
+
+  T.initState('dev');
+  T.setValNow('ecosystemTools', { 'azure-policy': true });
+
+  const panel = T.renderDeployGuidePanel(T.getFlatState());
+
+  assert(!panel.includes('chmod +x post-deploy-tools.sh'), 'Bicep-native-only should not show post-deploy script');
+  assert(panel.includes('Azure Policy'), 'Bicep-native tool card should still render');
+
+  dom.window.close();
+}
+
+// ----------------------------------------------------------
+// 30. Automated-only selection keeps install wording
+// ----------------------------------------------------------
+console.log('30. Automated-only selection keeps install wording');
+{
+  const dom = createDom();
+  const T = dom.window.__TEST__;
+
+  T.initState('dev');
+  T.setValNow('ecosystemTools', { nginx: true });
+
+  const panel = T.renderDeployGuidePanel(T.getFlatState());
+  const guide = T.generateDeploymentGuide(T.getFlatState());
+
+  assert(panel.includes('install selected ecosystem tools'), 'Step 7 should keep install wording for automated-only');
+  assert(!panel.includes('starter commands'), 'Step 7 should not mention starter commands for automated-only');
+  assert(guide.includes('installs each selected tool automatically'), 'Guide should keep automated-only wording');
+
+  dom.window.close();
+}
+
+// ----------------------------------------------------------
 // Summary
 // ----------------------------------------------------------
 console.log('\n' + '='.repeat(50));
