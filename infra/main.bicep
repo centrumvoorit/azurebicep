@@ -93,6 +93,19 @@ resource rg 'Microsoft.Resources/resourceGroups@2025-04-01' = {
 // Modules
 // ============================================================================
 
+module natGateway 'modules/network/natGateway.bicep' = {
+  name: 'natgateway-deployment'
+  scope: rg
+  params: {
+    location: location
+    tags: envTags
+    customerName: customerName
+    environment: environment
+    outboundIpCount: aksConfig.?natGatewayOutboundIpCount ?? 1
+    idleTimeoutMinutes: aksConfig.?natGatewayIdleTimeoutMinutes ?? 4
+  }
+}
+
 module network 'modules/network/vnet.bicep' = {
   name: 'network-deployment'
   scope: rg
@@ -105,6 +118,7 @@ module network 'modules/network/vnet.bicep' = {
     aksSubnetPrefix: networkConfig.aksSubnetPrefix
     servicesSubnetPrefix: networkConfig.servicesSubnetPrefix
     privateEndpointSubnetPrefix: networkConfig.privateEndpointSubnetPrefix
+    natGatewayId: natGateway.outputs.natGatewayId
   }
 }
 
@@ -194,8 +208,6 @@ module aks 'modules/aks/aksCluster.bicep' = {
     osDiskSizeGB: aksConfig.osDiskSizeGB
     maxPodsPerNode: aksConfig.maxPodsPerNode
     adminGroupObjectIds: adminGroupObjectIds
-    natGatewayOutboundIpCount: aksConfig.?natGatewayOutboundIpCount ?? 1
-    natGatewayIdleTimeoutMinutes: aksConfig.?natGatewayIdleTimeoutMinutes ?? 4
   }
 }
 
