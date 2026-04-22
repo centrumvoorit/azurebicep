@@ -495,6 +495,16 @@ console.log('20. Linkerd is manualOnly');
   assert(!execBlock.includes('linkerd install'), 'Post-deploy should NOT execute linkerd install');
   assert(script.includes('Linkerd'), 'Post-deploy should mention Linkerd as manual');
 
+  // Verify deployType metadata
+  const tools = T.ECOSYSTEM_TOOLS;
+  var linkerdTool;
+  for (const catKey of Object.keys(tools)) {
+    for (const t of tools[catKey].tools) {
+      if (t.id === 'linkerd') linkerdTool = t;
+    }
+  }
+  assert(linkerdTool.deployType === 'CLI install', 'Linkerd deployType should be CLI install, not Helm install');
+
   dom.window.close();
 }
 

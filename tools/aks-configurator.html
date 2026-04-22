@@ -293,7 +293,7 @@ const ECOSYSTEM_TOOLS = {
         id: 'linkerd',
         label: 'Linkerd',
         description: 'Lightweight, ultrafast service mesh focused on simplicity and performance.',
-        deployType: 'Helm install',
+        deployType: 'CLI install',
         requirements: function(state) {
           var vcpu = getVmVcpu(state.userNodeVmSize ? state.userNodeVmSize.value : 'Standard_D4s_v5');
           return vcpu < 2 ? ['Requires at least 2 vCPU on user nodes'] : [];
@@ -301,8 +301,6 @@ const ECOSYSTEM_TOOLS = {
         conflicts: ['istio'],
         manualOnly: true,
         guidance: {
-          helmRepo: 'https://helm.linkerd.io/stable',
-          chart: 'linkerd-control-plane',
           namespace: 'linkerd',
           commands: [
             'curl -sL https://run.linkerd.io/install | sh',
@@ -3646,7 +3644,7 @@ function renderStep6() {
 
   var html = '<h2 class="text-xl font-bold text-gray-800 mb-1">Step 6: Ecosystem Tools</h2>' +
     '<p class="text-sm text-gray-500 mb-4">Select tools to include in your deployment guide.</p>' +
-    infoPanel('Select the tools to include in your deployment guide. Starter Helm commands and configuration guidance will be generated for each selected tool.') +
+    infoPanel('Select the tools to include in your deployment guide. Install commands and configuration guidance will be generated for each selected tool.') +
     '<div class="mt-6"></div>';
 
   var catKeys = Object.keys(ECOSYSTEM_TOOLS);
@@ -3747,13 +3745,37 @@ function renderDeployGuidePanel(s) {
       './deploy.sh') +
     '</div></div>';
 
+  // --- Count automatable vs manual-only ecosystem tools for panel text ---
+  var panelAutoCount = 0;
+  var panelManualCount = 0;
+  var panelBicepNative = { 'azure-monitor': 1, 'azure-policy': 1, 'csi-secret-store': 1 };
+  var panelEcoTools = s.ecosystemTools || {};
+  var panelCatKeys = Object.keys(ECOSYSTEM_TOOLS);
+  for (var pci = 0; pci < panelCatKeys.length; pci++) {
+    var pCatTools = ECOSYSTEM_TOOLS[panelCatKeys[pci]].tools;
+    for (var pti = 0; pti < pCatTools.length; pti++) {
+      var pt = pCatTools[pti];
+      if (!panelEcoTools[pt.id] || panelBicepNative[pt.id]) continue;
+      if (!pt.guidance || !pt.guidance.commands || !pt.guidance.commands.length) continue;
+      if (pt.manualOnly) { panelManualCount++; } else { panelAutoCount++; }
+    }
+  }
+
   // --- Post-deploy tools note (only when ecosystem tools are selected) ---
   var hasPostDeployTools = generatePostDeployScript(s) !== '';
   if (hasPostDeployTools) {
+    var panelDesc;
+    if (panelAutoCount > 0 && panelManualCount > 0) {
+      panelDesc = 'After deploy.sh completes, run post-deploy-tools.sh. It polls until the deployment succeeds, installs automatable tools, and prints starter commands for tools that require manual configuration.';
+    } else if (panelAutoCount > 0) {
+      panelDesc = 'After deploy.sh completes, run post-deploy-tools.sh to install selected ecosystem tools. It polls until the deployment succeeds, then installs and verifies each tool.';
+    } else {
+      panelDesc = 'After deploy.sh completes, run post-deploy-tools.sh to get cluster credentials. Selected tools require manual configuration — the script prints starter commands to review and edit before running.';
+    }
     html += '<div class="border border-blue-200 rounded-lg mb-4">' +
       '<div class="px-4 py-3 bg-blue-50 border-b border-blue-200 rounded-t-lg">' +
         '<h4 class="text-sm font-semibold text-blue-700">Post-Deploy: Ecosystem Tools</h4>' +
-        '<p class="text-xs text-blue-600 mt-1">After deploy.sh completes, run post-deploy-tools.sh to install selected ecosystem tools. It polls until the deployment succeeds, then installs and verifies each tool.</p>' +
+        '<p class="text-xs text-blue-600 mt-1">' + panelDesc + '</p>' +
       '</div>' +
       '<div class="p-4">' +
       copyableBlock('post-deploy-script',
@@ -3874,10 +3896,13 @@ function renderDeployGuidePanel(s) {
     }
   }
   if (toolCards) {
+    var cardSubtext = (panelAutoCount > 0)
+      ? 'Install commands for selected tools. Run after cluster is ready.'
+      : 'Starter commands for selected tools. Review and edit before running.';
     html += '<div class="border border-gray-200 rounded-lg mb-4">' +
       '<div class="px-4 py-3 bg-gray-50 border-b border-gray-200 rounded-t-lg">' +
         '<h4 class="text-sm font-semibold text-gray-700">Post-Deploy: Ecosystem Tools</h4>' +
-        '<p class="text-xs text-gray-500 mt-1">Install commands for selected tools. Run after cluster is ready.</p>' +
+        '<p class="text-xs text-gray-500 mt-1">' + cardSubtext + '</p>' +
       '</div>' +
       '<div class="p-4">' + toolCards + '</div></div>';
   }
