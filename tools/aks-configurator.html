@@ -236,6 +236,7 @@ const ECOSYSTEM_TOOLS = {
         id: 'kube-prometheus-stack',
         label: 'kube-prometheus-stack',
         description: 'Full Prometheus + Grafana monitoring stack with pre-built dashboards for Kubernetes.',
+        deliveryMode: 'postDeployAuto',
         deployType: 'Helm install',
         requirements: function(state) {
           var vcpu = getVmVcpu(state.userNodeVmSize ? state.userNodeVmSize.value : 'Standard_D4s_v5');
@@ -257,6 +258,7 @@ const ECOSYSTEM_TOOLS = {
         id: 'azure-monitor',
         label: 'Azure Monitor (Container Insights)',
         description: 'Native Azure monitoring integration with Log Analytics workspace.',
+        deliveryMode: 'bicep',
         deployType: 'AKS add-on',
         requirements: function(state) {
           if (!state.deployMonitoring || !state.deployMonitoring.value) return ['Requires monitoring feature flag enabled (Step 5)'];
@@ -277,6 +279,7 @@ const ECOSYSTEM_TOOLS = {
         id: 'istio',
         label: 'Istio (AKS managed)',
         description: 'Azure-managed Istio service mesh with mTLS, traffic management, and observability.',
+        deliveryMode: 'postDeployAuto',
         deployType: 'AKS add-on',
         requirements: function(state) {
           var vcpu = getVmVcpu(state.userNodeVmSize ? state.userNodeVmSize.value : 'Standard_D4s_v5');
@@ -293,13 +296,13 @@ const ECOSYSTEM_TOOLS = {
         id: 'linkerd',
         label: 'Linkerd',
         description: 'Lightweight, ultrafast service mesh focused on simplicity and performance.',
+        deliveryMode: 'postDeployManual',
         deployType: 'CLI install',
         requirements: function(state) {
           var vcpu = getVmVcpu(state.userNodeVmSize ? state.userNodeVmSize.value : 'Standard_D4s_v5');
           return vcpu < 2 ? ['Requires at least 2 vCPU on user nodes'] : [];
         },
         conflicts: ['istio'],
-        manualOnly: true,
         guidance: {
           namespace: 'linkerd',
           commands: [
@@ -322,6 +325,7 @@ const ECOSYSTEM_TOOLS = {
         id: 'nginx',
         label: 'NGINX Ingress Controller',
         description: 'Community-maintained NGINX-based ingress controller, widely adopted.',
+        deliveryMode: 'postDeployAuto',
         deployType: 'Helm install',
         requirements: function() { return []; },
         guidance: {
@@ -340,9 +344,9 @@ const ECOSYSTEM_TOOLS = {
         id: 'agic',
         label: 'Azure App Gateway (AGIC)',
         description: 'Azure Application Gateway Ingress Controller with WAF and SSL termination.',
+        deliveryMode: 'postDeployManual',
         deployType: 'AKS add-on',
         requirements: function() { return []; },
-        manualOnly: true,
         guidance: {
           commands: ['az aks enable-addons -g <rg> -n <aks> --addons ingress-appgw --appgw-subnet-cidr <YOUR_APPGW_SUBNET_CIDR>'],
           verifyCmd: 'kubectl get pods -n kube-system -l app=ingress-appgw',
@@ -353,6 +357,7 @@ const ECOSYSTEM_TOOLS = {
         id: 'traefik',
         label: 'Traefik',
         description: 'Cloud-native ingress controller with automatic service discovery and Let\'s Encrypt.',
+        deliveryMode: 'postDeployAuto',
         deployType: 'Helm install',
         requirements: function() { return []; },
         guidance: {
@@ -376,6 +381,7 @@ const ECOSYSTEM_TOOLS = {
         id: 'cert-manager',
         label: 'cert-manager',
         description: 'Automatic TLS certificate management with Let\'s Encrypt and other issuers.',
+        deliveryMode: 'postDeployAuto',
         deployType: 'Helm install',
         requirements: function(state) {
           var tools = (state.ecosystemTools && state.ecosystemTools.value) ? state.ecosystemTools.value : {};
@@ -398,6 +404,7 @@ const ECOSYSTEM_TOOLS = {
         id: 'external-dns',
         label: 'external-dns',
         description: 'Automatically manages DNS records in Azure DNS based on Kubernetes resources.',
+        deliveryMode: 'postDeployAuto',
         deployType: 'Helm install',
         requirements: function() { return []; },
         guidance: {
@@ -421,10 +428,10 @@ const ECOSYSTEM_TOOLS = {
         id: 'flux',
         label: 'Flux',
         description: 'Azure-managed GitOps operator for continuous deployment from Git repositories.',
+        deliveryMode: 'postDeployManual',
         deployType: 'AKS add-on',
         requirements: function() { return []; },
         conflicts: ['argocd'],
-        manualOnly: true,
         guidance: {
           commands: ['az k8s-configuration flux create -g <rg> -c <aks> -n gitops --namespace flux-system -t managedClusters --scope cluster -u <YOUR_GIT_REPO_URL>'],
           verifyCmd: 'az k8s-configuration flux list -g <rg> -c <aks> -t managedClusters',
@@ -435,6 +442,7 @@ const ECOSYSTEM_TOOLS = {
         id: 'argocd',
         label: 'ArgoCD',
         description: 'Declarative GitOps continuous delivery tool with web UI and SSO support.',
+        deliveryMode: 'postDeployAuto',
         deployType: 'Helm install',
         requirements: function(state) {
           var vcpu = getVmVcpu(state.userNodeVmSize ? state.userNodeVmSize.value : 'Standard_D4s_v5');
@@ -457,6 +465,7 @@ const ECOSYSTEM_TOOLS = {
         id: 'gatekeeper',
         label: 'OPA/Gatekeeper',
         description: 'Open Policy Agent for Kubernetes admission control and policy enforcement.',
+        deliveryMode: 'postDeployAuto',
         deployType: 'Helm install',
         requirements: function() { return []; },
         conflicts: ['azure-policy'],
@@ -476,6 +485,7 @@ const ECOSYSTEM_TOOLS = {
         id: 'azure-policy',
         label: 'Azure Policy',
         description: 'Azure-native policy engine for Kubernetes with built-in compliance reporting.',
+        deliveryMode: 'bicep',
         deployType: 'AKS add-on',
         requirements: function() { return []; },
         conflicts: ['gatekeeper'],
@@ -489,6 +499,7 @@ const ECOSYSTEM_TOOLS = {
         id: 'falco',
         label: 'Falco',
         description: 'Runtime security and threat detection for containers using system call monitoring.',
+        deliveryMode: 'postDeployAuto',
         deployType: 'Advanced',
         requirements: function() { return []; },
         guidance: {
@@ -507,6 +518,7 @@ const ECOSYSTEM_TOOLS = {
         id: 'keda',
         label: 'KEDA',
         description: 'Kubernetes Event-Driven Autoscaling for scaling based on external metrics.',
+        deliveryMode: 'postDeployAuto',
         deployType: 'AKS add-on',
         requirements: function() { return []; },
         guidance: {
@@ -519,6 +531,7 @@ const ECOSYSTEM_TOOLS = {
         id: 'csi-secret-store',
         label: 'CSI Secret Store + Key Vault',
         description: 'Mount Azure Key Vault secrets directly into pods as volumes or env variables.',
+        deliveryMode: 'bicep',
         deployType: 'AKS add-on',
         requirements: function(state) {
           if (!state.deployKeyVault || !state.deployKeyVault.value) return ['Requires Key Vault to be enabled (Step 5)'];
@@ -537,12 +550,6 @@ const ECOSYSTEM_TOOLS = {
 // ============================================================
 // SHARED ECOSYSTEM TOOL PLAN
 // ============================================================
-
-var BICEP_NATIVE_TOOL_IDS = {
-  'azure-monitor': 1,
-  'azure-policy': 1,
-  'csi-secret-store': 1
-};
 
 function getAllEcosystemTools() {
   var all = [];
@@ -576,7 +583,7 @@ function getEcosystemToolPlan(s) {
 
     plan.selected.push(tool);
 
-    if (BICEP_NATIVE_TOOL_IDS[tool.id]) {
+    if (tool.deliveryMode === 'bicep') {
       plan.bicepNative.push(tool);
       continue;
     }
@@ -585,7 +592,7 @@ function getEcosystemToolPlan(s) {
       continue;
     }
 
-    if (tool.manualOnly) {
+    if (tool.deliveryMode === 'postDeployManual') {
       plan.manual.push(tool);
       plan.hasStarterCommands = true;
     } else {
@@ -3773,7 +3780,7 @@ function renderStep6() {
       // Guidance preview when enabled (Bicep-native tools show inline note instead)
       var guidanceHtml = '';
       if (isEnabled) {
-        if (BICEP_NATIVE_TOOL_IDS[tool.id]) {
+        if (tool.deliveryMode === 'bicep') {
           guidanceHtml = '<div class="mt-2 bg-green-50 border border-green-200 rounded p-2">' +
             '<p class="text-xs text-green-700">Already deployed via Bicep — no post-deploy action needed.</p></div>';
         } else {
@@ -3962,7 +3969,7 @@ function renderDeployGuidePanel(s) {
       '<div class="flex justify-between items-start mb-2">' +
         '<div><span class="text-sm font-medium text-gray-700">' + escapeHtml(tool.label) + '</span>' +
         '<span class="ml-2 px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-700">' + escapeHtml(tool.deployType) + '</span>' +
-        (tool.manualOnly ? '<span class="ml-1 px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700">manual</span>' : '') +
+        (tool.deliveryMode === 'postDeployManual' ? '<span class="ml-1 px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700">manual</span>' : '') +
         '</div></div>';
     if (cmds) {
       toolCards += copyableBlock('tool-' + tool.id, escapeHtml(cmds.trim()));
@@ -4922,7 +4929,7 @@ function generateDeploymentGuide(s) {
     }
     var g = tool.guidance;
 
-    lines.push('### ' + tool.label + (tool.manualOnly ? ' *(manual)*' : ''));
+    lines.push('### ' + tool.label + (tool.deliveryMode === 'postDeployManual' ? ' *(manual)*' : ''));
     lines.push('');
     lines.push(tool.description);
     lines.push('');
