@@ -2447,6 +2447,59 @@ function validateStep(stepNum) {
         }
       }
     }
+
+    var privateCluster6 = state.enablePrivateCluster ? state.enablePrivateCluster.value : false;
+
+    // Azure Policy and CSI Secret Store are already enabled in the Bicep template
+    if (ecoTools['azure-policy']) {
+      result.infos.push('Azure Policy is already enabled in the Bicep template (azurepolicy addon). No extra action needed.');
+    }
+    if (ecoTools['csi-secret-store']) {
+      result.infos.push('CSI Secret Store is already enabled in the Bicep template (azureKeyvaultSecretsProvider addon). No extra action needed.');
+    }
+
+    // AGIC + private cluster needs subnet planning
+    if (ecoTools['agic'] && privateCluster6) {
+      result.warnings.push('AGIC requires a dedicated subnet for Application Gateway. Private clusters need additional network planning for App Gateway integration.');
+    }
+
+    // external-dns without ingress controller
+    if (ecoTools['external-dns']) {
+      var hasIngress6 = ecoTools['nginx'] || ecoTools['agic'] || ecoTools['traefik'];
+      if (!hasIngress6) {
+        result.warnings.push('external-dns is most useful paired with an ingress controller to auto-manage DNS records for exposed services.');
+      }
+      if (privateCluster6) {
+        result.warnings.push('external-dns on a private cluster requires split-horizon DNS configuration to manage internal DNS zones.');
+      }
+    }
+
+    // Falco resource warning
+    if (ecoTools['falco']) {
+      var userVcpu6 = getVmVcpu(state.userNodeVmSize ? state.userNodeVmSize.value : 'Standard_D4s_v5');
+      if (userVcpu6 <= 2) {
+        result.warnings.push('Falco runs as a DaemonSet (~0.5 vCPU per node). On 2 vCPU VMs this consumes 25% of node capacity.');
+      }
+    }
+
+    // Too many tools on small VMs
+    var enabledCount6 = 0;
+    var heavyTools6 = 0;
+    var toolIds6 = Object.keys(ecoTools);
+    var heavyIds = { 'kube-prometheus-stack': 1, 'istio': 1, 'argocd': 1, 'falco': 1 };
+    for (var ec6 = 0; ec6 < toolIds6.length; ec6++) {
+      if (ecoTools[toolIds6[ec6]]) {
+        enabledCount6++;
+        if (heavyIds[toolIds6[ec6]]) heavyTools6++;
+      }
+    }
+    var userVcpu6b = getVmVcpu(state.userNodeVmSize ? state.userNodeVmSize.value : 'Standard_D4s_v5');
+    if (heavyTools6 >= 2 && userVcpu6b <= 4) {
+      result.warnings.push('Multiple resource-heavy tools selected (Prometheus, Istio, ArgoCD, Falco) on ' + userVcpu6b + ' vCPU nodes. Consider larger VMs or fewer tools.');
+    }
+    if (enabledCount6 >= 5) {
+      result.infos.push(enabledCount6 + ' ecosystem tools selected. Ensure your node pool has enough capacity for all workloads.');
+    }
   }
   return result;
 }
@@ -2937,13 +2990,15 @@ function renderStep2() {
   return '<h2 class="text-xl font-bold text-gray-800 mb-1">Step 2: Access &amp; Governance</h2>' +
     '<p class="text-sm text-gray-500 mb-6">Configure cluster admin groups, resource tags, and additional RBAC assignments.</p>' +
 
-    infoPanel('Azure RBAC is enabled. Local accounts are disabled. You must enter a real Entra ID group Object ID below &mdash; placeholder GUIDs are blocked. Find it via: Azure Portal &rarr; Entra ID &rarr; Groups &rarr; your group &rarr; Object ID.') +
+    infoPanel('Azure RBAC is enabled. Local accounts are disabled. You must enter a real Entra ID group or user Object ID below &mdash; placeholder GUIDs are blocked.<br><br>' +
+      '<strong>Get your user Object ID:</strong> run this in Azure CLI or Cloud Shell:<br>' +
+      '<code class="bg-gray-100 px-2 py-1 rounded text-xs font-mono select-all">az ad signed-in-user show --query id -o tsv</code>') +
     '<div class="mb-6"></div>' +
 
     fieldRow('Admin Group Object IDs',
       adminGroupField,
       'params',
-      'Entra ID group Object IDs granted cluster-admin access. Must be a real GUID &mdash; placeholder values are blocked to prevent cluster lockout. At least one required.') +
+      'Entra ID group or user Object IDs granted cluster-admin access. Must be a real GUID &mdash; placeholder values are blocked to prevent cluster lockout. At least one required.') +
 
     '<h3 class="text-base font-semibold text-gray-700 mb-3 mt-6">Required Tags</h3>' +
 
@@ -3587,6 +3642,187 @@ function renderStep6() {
 
   return html;
 }
+function copyableBlock(id, code) {
+  return '<div class="relative group">' +
+    '<button onclick="copyToClipboard(document.getElementById(\'' + id + '\').textContent)" ' +
+      'class="absolute top-2 right-2 px-2 py-1 text-xs rounded bg-gray-700 text-gray-300 hover:bg-gray-600 opacity-0 group-hover:opacity-100 transition-opacity">Copy</button>' +
+    '<pre id="' + id + '" class="bg-gray-900 text-green-400 rounded-lg p-4 text-xs font-mono overflow-x-auto select-all">' + code + '</pre></div>';
+}
+
+function renderDeployGuidePanel(s) {
+  var env = s.environment || 'dev';
+  var region = s.location || 'westeurope';
+  var rgName = 'rg-' + (s.customerName || '{name}') + '-' + env + '-' + region;
+  var aksName = 'aks-' + (s.customerName || '{name}') + '-' + env;
+  var paramFile = 'main.' + env + '.bicepparam';
+
+  var html = '<div class="mb-6">' +
+    '<h3 class="text-base font-semibold text-gray-700 mb-4">Deployment Guide</h3>';
+
+  // --- Quick Start (Cloud Shell) ---
+  html += '<div class="border border-gray-200 rounded-lg mb-4">' +
+    '<div class="px-4 py-3 bg-gray-50 border-b border-gray-200 rounded-t-lg">' +
+      '<h4 class="text-sm font-semibold text-gray-700">Quick Start (Azure Cloud Shell)</h4>' +
+      '<p class="text-xs text-gray-500 mt-1">Upload zip via Cloud Shell, run deploy.sh. Handles providers, validation, and deployment.</p>' +
+    '</div>' +
+    '<div class="p-4">' +
+    copyableBlock('qs-script',
+      'cd ~\n' +
+      'mkdir -p deploy &amp;&amp; rm -rf deploy/*\n' +
+      'unzip aks-deployment-' + escapeHtml(s.customerName || 'name') + '-' + escapeHtml(env) + '.zip -d deploy\n' +
+      'cd deploy/infra\n' +
+      'chmod +x deploy.sh\n' +
+      './deploy.sh') +
+    '</div></div>';
+
+  // --- Manual Deploy (no deploy.sh) ---
+  html += '<div class="border border-gray-200 rounded-lg mb-4">' +
+    '<div class="px-4 py-3 bg-gray-50 border-b border-gray-200 rounded-t-lg">' +
+      '<h4 class="text-sm font-semibold text-gray-700">Manual Deploy (skip what-if)</h4>' +
+      '<p class="text-xs text-gray-500 mt-1">Direct deployment without pre-flight validation. Use when re-deploying or when deploy.sh fails on what-if.</p>' +
+    '</div>' +
+    '<div class="p-4">' +
+    copyableBlock('manual-script',
+      'az deployment sub create \\\n' +
+      '  --name aks-' + escapeHtml(s.customerName || 'name') + '-' + escapeHtml(env) + ' \\\n' +
+      '  --location ' + escapeHtml(region) + ' \\\n' +
+      '  --template-file main.bicep \\\n' +
+      '  --parameters ' + escapeHtml(paramFile) + ' \\\n' +
+      '  --no-wait') +
+    '</div></div>';
+
+  // --- Monitor + Connect ---
+  html += '<div class="border border-gray-200 rounded-lg mb-4">' +
+    '<div class="px-4 py-3 bg-gray-50 border-b border-gray-200 rounded-t-lg">' +
+      '<h4 class="text-sm font-semibold text-gray-700">Monitor &amp; Connect</h4>' +
+      '<p class="text-xs text-gray-500 mt-1">Check deployment status and connect kubectl to the cluster.</p>' +
+    '</div>' +
+    '<div class="p-4 space-y-3">' +
+    '<p class="text-xs font-medium text-gray-600">Check status:</p>' +
+    copyableBlock('monitor-script',
+      'az deployment sub show \\\n' +
+      '  --name aks-' + escapeHtml(s.customerName || 'name') + '-' + escapeHtml(env) + ' \\\n' +
+      '  --query properties.provisioningState -o tsv') +
+    '<p class="text-xs font-medium text-gray-600 mt-3">If failed, get error details:</p>' +
+    copyableBlock('error-script',
+      'az deployment operation sub list \\\n' +
+      '  --name aks-' + escapeHtml(s.customerName || 'name') + '-' + escapeHtml(env) + ' \\\n' +
+      '  --query "[?properties.provisioningState==\'Failed\'].{resource:properties.targetResource.resourceType, error:properties.statusMessage.error}" \\\n' +
+      '  -o json') +
+    '<p class="text-xs font-medium text-gray-600 mt-3">Connect to cluster:</p>' +
+    copyableBlock('connect-script',
+      'az aks get-credentials \\\n' +
+      '  --resource-group ' + escapeHtml(rgName) + ' \\\n' +
+      '  --name ' + escapeHtml(aksName) + '\n' +
+      'kubectl get nodes') +
+    '</div></div>';
+
+  // --- Destroy / Cleanup ---
+  html += '<div class="border border-red-200 rounded-lg mb-4">' +
+    '<div class="px-4 py-3 bg-red-50 border-b border-red-200 rounded-t-lg">' +
+      '<h4 class="text-sm font-semibold text-red-700">Destroy / Cleanup</h4>' +
+      '<p class="text-xs text-red-500 mt-1">Delete all resources. This is irreversible.</p>' +
+    '</div>' +
+    '<div class="p-4">' +
+    copyableBlock('destroy-script',
+      'az group delete --name ' + escapeHtml(rgName) + ' --yes --no-wait') +
+    '</div></div>';
+
+  // --- Authorized IPs update ---
+  var authIPs = s.apiServerAuthorizedIPs || [];
+  var validIPs = [];
+  for (var i = 0; i < authIPs.length; i++) {
+    var ip = (authIPs[i] || '').trim();
+    if (ip) validIPs.push(ip);
+  }
+  if (!s.enablePrivateCluster && validIPs.length > 0) {
+    html += '<div class="border border-gray-200 rounded-lg mb-4">' +
+      '<div class="px-4 py-3 bg-gray-50 border-b border-gray-200 rounded-t-lg">' +
+        '<h4 class="text-sm font-semibold text-gray-700">Update API Server IP Ranges</h4>' +
+        '<p class="text-xs text-gray-500 mt-1">Add or rotate authorized IPs without redeploying.</p>' +
+      '</div>' +
+      '<div class="p-4">' +
+      copyableBlock('ip-script',
+        'az aks update \\\n' +
+        '  --resource-group ' + escapeHtml(rgName) + ' \\\n' +
+        '  --name ' + escapeHtml(aksName) + ' \\\n' +
+        '  --api-server-authorized-ip-ranges ' + escapeHtml(validIPs.join(','))) +
+      '</div></div>';
+  }
+
+  // --- Ecosystem tools ---
+  var tools = s.ecosystemTools || {};
+  var catKeys = Object.keys(ECOSYSTEM_TOOLS);
+  var toolCards = '';
+  for (var ci = 0; ci < catKeys.length; ci++) {
+    var catTools = ECOSYSTEM_TOOLS[catKeys[ci]].tools;
+    for (var ti = 0; ti < catTools.length; ti++) {
+      var tool = catTools[ti];
+      if (!tools[tool.id]) continue;
+      var g = tool.guidance;
+      var cmds = '';
+      if (g && g.commands && g.commands.length) {
+        for (var ci2 = 0; ci2 < g.commands.length; ci2++) {
+          cmds += g.commands[ci2]
+            .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName)
+            .replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName) + '\n';
+        }
+        if (g.verifyCmd) {
+          cmds += '\n# Verify\n' + g.verifyCmd
+            .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName)
+            .replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName);
+        }
+      }
+      toolCards += '<div class="border border-gray-200 rounded-lg p-3 mb-2">' +
+        '<div class="flex justify-between items-start mb-2">' +
+          '<div><span class="text-sm font-medium text-gray-700">' + escapeHtml(tool.label) + '</span>' +
+          '<span class="ml-2 px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-700">' + escapeHtml(tool.deployType) + '</span></div></div>';
+      if (cmds) {
+        toolCards += copyableBlock('tool-' + tool.id, escapeHtml(cmds.trim()));
+      }
+      if (g && g.note) {
+        toolCards += '<p class="text-xs text-gray-500 mt-2">' + escapeHtml(g.note) + '</p>';
+      }
+      toolCards += '</div>';
+    }
+  }
+  if (toolCards) {
+    html += '<div class="border border-gray-200 rounded-lg mb-4">' +
+      '<div class="px-4 py-3 bg-gray-50 border-b border-gray-200 rounded-t-lg">' +
+        '<h4 class="text-sm font-semibold text-gray-700">Post-Deploy: Ecosystem Tools</h4>' +
+        '<p class="text-xs text-gray-500 mt-1">Install commands for selected tools. Run after cluster is ready.</p>' +
+      '</div>' +
+      '<div class="p-4">' + toolCards + '</div></div>';
+  }
+
+  // --- Breaking changes notice (collapsible) ---
+  if (s.enablePrivateCluster) {
+    html += '<details class="border border-amber-200 rounded-lg mb-4">' +
+      '<summary class="px-4 py-3 bg-amber-50 text-sm font-semibold text-amber-700 cursor-pointer hover:bg-amber-100 rounded-t-lg">Private Cluster Notes</summary>' +
+      '<div class="p-4 text-xs text-gray-700 space-y-1">' +
+        '<p>Requires VPN or private network access to the VNet to reach the API server.</p>' +
+        '<p>Private endpoints are used for ACR, Key Vault, and other supporting services.</p>' +
+      '</div></details>';
+  }
+
+  html += '<details class="border border-gray-200 rounded-lg mb-4">' +
+    '<summary class="px-4 py-3 bg-gray-50 text-sm font-semibold text-gray-700 cursor-pointer hover:bg-gray-100 rounded-t-lg">Existing Cluster? Read This</summary>' +
+    '<div class="p-4 text-xs text-gray-700 space-y-2">' +
+      '<p>This Bicep uses <strong>Cilium dataplane</strong> (Azure CNI Overlay) and <strong>user-assigned NAT Gateway</strong>. These are create-time properties and cannot be changed on existing clusters.</p>' +
+      '<p>For existing clusters using Azure CNI classic + Load Balancer outbound, either delete first (blue/green) or edit <code>modules/aks/aksCluster.bicep</code>:</p>' +
+      '<ul class="list-disc list-inside text-gray-600 ml-2">' +
+        '<li><code>networkPluginMode: \'overlay\'</code> &rarr; remove</li>' +
+        '<li><code>networkDataplane: \'cilium\'</code> &rarr; remove</li>' +
+        '<li><code>networkPolicy: \'cilium\'</code> &rarr; <code>\'azure\'</code></li>' +
+        '<li><code>outboundType: \'userAssignedNATGateway\'</code> &rarr; <code>\'loadBalancer\'</code></li>' +
+        '<li>Remove NAT gateway module and VNet natGatewayId param</li>' +
+      '</ul>' +
+    '</div></details>';
+
+  html += '</div>';
+  return html;
+}
+
 function renderStep7() {
   var s = getFlatState();
   var validation = validateAllSteps();
@@ -3734,15 +3970,8 @@ function renderStep7() {
         '</div></div>' +
       '<pre class="bg-gray-900 text-green-400 rounded-lg p-4 text-xs font-mono overflow-x-auto max-h-96 overflow-y-auto">' + escapeHtml(bicepContent) + '</pre></div>';
 
-    // Deployment guide preview
-    html += '<div class="mb-6">' +
-      '<div class="flex items-center justify-between mb-2">' +
-        '<h3 class="text-base font-semibold text-gray-700">Deployment Guide Preview</h3>' +
-        '<div class="flex gap-2">' +
-          '<button onclick="copyToClipboard(generateDeploymentGuide(getFlatState()))" class="px-3 py-1 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50">Copy</button>' +
-          '<button onclick="downloadFile(\'' + escapeHtml(guideFilename) + '\', generateDeploymentGuide(getFlatState()))" class="px-3 py-1 text-xs rounded border border-blue-300 text-blue-600 hover:bg-blue-50">Download Guide</button>' +
-        '</div></div>' +
-      '<pre class="bg-gray-50 border border-gray-200 rounded-lg p-4 text-xs font-mono overflow-x-auto max-h-96 overflow-y-auto text-gray-800">' + escapeHtml(guideContent) + '</pre></div>';
+    // Deployment guide — rendered as interactive panels with copy-ready scripts
+    html += renderDeployGuidePanel(s);
 
     // Individual download: main.bicep
     html += '<div class="mb-4 flex items-center gap-3">' +
@@ -4014,9 +4243,12 @@ function generateDeployScript(s) {
   lines.push('# Generated by AKS Configurator');
   lines.push('# -----------------------------------------------------------');
   lines.push('');
+  var rgName = 'rg-' + (s.customerName || 'deploy') + '-' + env + '-' + region;
+
   lines.push('LOCATION="' + region + '"');
   lines.push('PARAM_FILE="' + paramFile + '"');
   lines.push('DEPLOY_NAME="' + deployName + '"');
+  lines.push('RG_NAME="' + rgName + '"');
   lines.push('');
   lines.push('REQUIRED_PROVIDERS=(');
   for (var i = 0; i < providers.length; i++) {
@@ -4029,7 +4261,7 @@ function generateDeployScript(s) {
   lines.push('# -------------------------------------------------------');
   lines.push('# Step 1: Resource provider registration');
   lines.push('# -------------------------------------------------------');
-  lines.push('echo "==> [1/3] Checking resource provider registrations..."');
+  lines.push('echo "==> [1/4] Checking resource provider registrations..."');
   lines.push('for ns in "${REQUIRED_PROVIDERS[@]}"; do');
   lines.push('  state=$(az provider show --namespace "$ns" --query "registrationState" -o tsv 2>/dev/null || echo "NotRegistered")');
   lines.push('  if [ "$state" != "Registered" ]; then');
@@ -4050,12 +4282,26 @@ function generateDeployScript(s) {
   lines.push('echo "    All providers registered."');
   lines.push('');
 
-  // --- Step 2: What-If ---
+  // --- Step 2: Ensure resource group exists ---
   lines.push('# -------------------------------------------------------');
-  lines.push('# Step 2: What-If validation');
+  lines.push('# Step 2: Ensure resource group exists (required for what-if)');
   lines.push('# -------------------------------------------------------');
   lines.push('echo ""');
-  lines.push('echo "==> [2/3] Running what-if preview (validates quota, regions, SKUs, policies)..."');
+  lines.push('echo "==> [2/4] Ensuring resource group $RG_NAME exists..."');
+  lines.push('if az group show --name "$RG_NAME" &>/dev/null; then');
+  lines.push('  echo "    $RG_NAME — already exists"');
+  lines.push('else');
+  lines.push('  az group create --name "$RG_NAME" --location "$LOCATION" --tags Environment=' + env + ' ManagedBy=Bicep -o none');
+  lines.push('  echo "    Created $RG_NAME"');
+  lines.push('fi');
+  lines.push('');
+
+  // --- Step 3: What-If ---
+  lines.push('# -------------------------------------------------------');
+  lines.push('# Step 3: What-If validation');
+  lines.push('# -------------------------------------------------------');
+  lines.push('echo ""');
+  lines.push('echo "==> [3/4] Running what-if preview (validates quota, regions, SKUs, policies)..."');
   lines.push('echo ""');
   lines.push('');
   lines.push('if ! az deployment sub what-if \\');
@@ -4074,7 +4320,7 @@ function generateDeployScript(s) {
   lines.push('# Step 3: Confirm and deploy');
   lines.push('# -------------------------------------------------------');
   lines.push('echo ""');
-  lines.push('echo "==> [3/3] What-if passed. Review the changes above."');
+  lines.push('echo "==> [4/4] What-if passed. Review the changes above."');
   lines.push('echo ""');
   lines.push('read -rp "Deploy now? [y/N] " confirm');
   lines.push('if [[ ! "$confirm" =~ ^[Yy]$ ]]; then');
@@ -4151,7 +4397,7 @@ function generateDeploymentGuide(s) {
   // Deploy command
   lines.push('## Deploy');
   lines.push('');
-  lines.push('The included `deploy.sh` script registers resource providers, runs a what-if preview, and deploys after confirmation:');
+  lines.push('The included `deploy.sh` script registers resource providers, creates the resource group, runs a what-if preview, and deploys after confirmation:');
   lines.push('');
   lines.push('```bash');
   lines.push('cd infra');

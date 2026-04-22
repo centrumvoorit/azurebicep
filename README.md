@@ -1,100 +1,92 @@
 # Enterprise AKS Infrastructure
 
-Bicep Infrastructure-as-Code voor het uitrollen van enterprise Azure Kubernetes Service (AKS) clusters met ondersteunende resources. Ships mee met een browser-based wizard die hetzelfde hardened pakket genereert op basis van klant-specifieke inputs.
+Bicep Infrastructure-as-Code for deploying enterprise Azure Kubernetes Service (AKS) clusters with supporting resources. Ships with a browser-based wizard that generates the same hardened package based on customer-specific inputs.
 
-Twee paden, één baseline:
+Two paths, one baseline:
 
-1. **`infra/`** — de reference deployment. `main.bicep` + `main.<env>.bicepparam`. Clone, pas parameters aan, `az deployment sub create`.
-2. **`tools/aks-configurator.html`** — zelfstandige HTML-wizard. Open in een browser, loop 7 stappen door, download een complete `.zip` met alle templates en een deployment guide. Beide paden genereren Bicep met dezelfde Well-Architected baseline — wijzigingen in infra/ en de configurator blijven in sync via de CI in dit repo.
+1. **`infra/`** — reference deployment. `main.bicep` + `main.<env>.bicepparam`. Clone, adjust parameters, `az deployment sub create`.
+2. **`tools/aks-configurator.html`** — standalone HTML wizard. Open in a browser, walk through 7 steps, download a complete `.zip` with all templates, a deploy script, and a deployment guide. Both paths generate Bicep with the same Well-Architected baseline — changes in `infra/` and the configurator stay in sync via CI.
 
-## Architectuurprincipes
+## Architecture Principles
 
-| Principe | Implementatie |
+| Principle | Implementation |
 |---|---|
-| Declaratieve orchestratie | Enkele `main.bicep` met feature flags |
-| Typed configuratie | `.bicepparam` met User-Defined Types (UDTs) in `types.bicep` |
-| Modulair & versioneerbaar | Onafhankelijke modules, ACR registry-ready |
-| Shift-left validatie | PSRule (blocking) + Checkov (soft-fail) op elke PR |
-| Hardened by default | AKS 2025-10-01 API, Cilium + Overlay, managed NAT gateway, Defender, Image Cleaner, CSI Secret Store, Azure Policy, auto-upgrade + maintenance windows, cost analysis, AzureLinux + Ephemeral disks |
-| Self-documenting | UDTs met `@description`, typed parameters, wizard + auto-generated deployment guide |
+| Declarative orchestration | Single `main.bicep` with feature flags |
+| Typed configuration | `.bicepparam` with User-Defined Types (UDTs) in `types.bicep` |
+| Modular & versionable | Independent modules, ACR registry-ready |
+| Shift-left validation | PSRule (blocking) + Checkov (soft-fail) on every PR |
+| Hardened by default | AKS 2025-10-01 API, Cilium + Overlay, user-assigned NAT Gateway, Defender, Image Cleaner, CSI Secret Store, Azure Policy, auto-upgrade + maintenance windows, cost analysis, AzureLinux + Managed disks |
+| Self-documenting | UDTs with `@description`, typed parameters, wizard + auto-generated deployment guide |
 
-## Wat wordt er uitgerold?
+## What Gets Deployed?
 
-Resources zijn optioneel via **feature flags** — schakel building blocks aan/uit per klant.
+Resources are optional via **feature flags** — toggle building blocks per customer.
 
-| Resource | Feature Flag | Beschrijving |
+| Resource | Feature Flag | Description |
 |---|---|---|
-| Resource Group | altijd | Dedicated resource group per omgeving |
-| Virtual Network | altijd | VNet met subnets voor AKS, services en private endpoints; NSGs met default-deny en outbound lateral-traversal guard |
-| AKS Cluster | altijd | Managed Kubernetes (API 2025-10-01). Cilium dataplane + Azure CNI Overlay, managed NAT gateway outbound, system + user node pools, auto-upgrade + twee maintenance windows, Defender for Containers, Image Cleaner, OIDC + Workload Identity, cost analysis |
-| Maintenance Configurations | altijd | `aksManagedAutoUpgradeSchedule` (Sun 03:00 UTC) + `aksManagedNodeOSUpgradeSchedule` (Sat 03:00 UTC) |
-| Managed Identity | altijd | User-assigned identity voor AKS |
-| Azure Container Registry | `features.deployAcr` | Premium registry met private endpoint, geo-replication voor acc/prod, export policy disabled |
-| Azure Key Vault | `features.deployKeyVault` | RBAC + purge protection + private endpoint; `azureKeyvaultSecretsProvider` CSI addon aan AKS-kant voor secret mounting |
-| Log Analytics | `features.deployMonitoring` | Workspace met replication in acc/prod |
-| Data Collection Rule | `features.deployMonitoring` | `azureMonitorProfile.containerInsights` + DCR association — moderne Container Insights pad, vervangt legacy `omsagent` addon |
-| Azure Policy addon | altijd (AKS) | Gatekeeper-based policy enforcement |
-| Role Assignments | conditioneel | Least-privilege RBAC, alleen voor gedeployde resources |
+| Resource Group | always | Dedicated resource group per environment |
+| NAT Gateway | always | User-assigned NAT gateway with zone-redundant public IPs for AKS outbound traffic |
+| Virtual Network | always | VNet with subnets for AKS, services, and private endpoints; NSGs with default-deny and outbound lateral-traversal guard |
+| AKS Cluster | always | Managed Kubernetes (API 2025-10-01). Cilium dataplane + Azure CNI Overlay, user-assigned NAT Gateway outbound, system + user node pools, auto-upgrade + two maintenance windows, Defender for Containers, Image Cleaner, OIDC + Workload Identity, cost analysis |
+| Maintenance Configurations | always | `aksManagedAutoUpgradeSchedule` (Sun 03:00 UTC) + `aksManagedNodeOSUpgradeSchedule` (Sat 03:00 UTC) |
+| Managed Identity | always | User-assigned identity for AKS |
+| Azure Container Registry | `features.deployAcr` | Premium registry with private endpoint, geo-replication for acc/prod, export policy disabled |
+| Azure Key Vault | `features.deployKeyVault` | RBAC + purge protection + private endpoint; `azureKeyvaultSecretsProvider` CSI addon on the AKS side for secret mounting |
+| Log Analytics | `features.deployMonitoring` | Workspace with replication in acc/prod |
+| Data Collection Rule | `features.deployMonitoring` | Container Insights via DCR + DCR association — modern monitoring path |
+| Azure Policy addon | always (AKS) | Gatekeeper-based policy enforcement |
+| Role Assignments | conditional | Least-privilege RBAC, only for deployed resources |
 
-## Structuur
+## Structure
 
 ```
 azurebicep/
-├── bicepconfig.json                       # Root linter regels + module registry alias
-├── ps-rule.yaml                            # Legacy root config (PSRule prefereert .ps-rule/)
-│
+├── bicepconfig.json
 ├── .ps-rule/
-│   ├── ps-rule.yaml                        # PSRule config — expansion + pathIgnore + suppressions
-│   └── suppression-groups.Rule.yaml        # SuppressionGroup voor hash-suffixed ACR namen
+│   ├── ps-rule.yaml
+│   └── suppression-groups.Rule.yaml
 │
 ├── infra/
-│   ├── bicepconfig.json                    # Downgrade use-recent-api-versions voor diagnosticSettings
-│   ├── main.bicep                          # Orchestrator met feature flags
+│   ├── bicepconfig.json
+│   ├── main.bicep                          # Orchestrator with feature flags
 │   ├── types.bicep                         # User-Defined Types (aksConfigType etc.)
-│   ├── main.dev.bicepparam                 # Dev parameters
-│   ├── main.acc.bicepparam                 # Acceptatie parameters
-│   ├── main.prod.bicepparam                # Productie parameters
+│   ├── main.dev.bicepparam
+│   ├── main.acc.bicepparam
+│   ├── main.prod.bicepparam
 │   └── modules/
+│       ├── aks/aksCluster.bicep
 │       ├── network/vnet.bicep
+│       ├── network/natGateway.bicep
 │       ├── identity/managedIdentity.bicep
 │       ├── monitoring/logAnalytics.bicep
-│       ├── monitoring/dcr.bicep            # Data Collection Rule + association
+│       ├── monitoring/dcr.bicep
 │       ├── acr/containerRegistry.bicep
 │       ├── keyvault/keyVault.bicep
-│       ├── aks/aksCluster.bicep
 │       ├── privateEndpoint/privateEndpoint.bicep
 │       └── roleAssignment/roleAssignment.bicep
 │
 ├── tools/
 │   ├── aks-configurator.html               # Browser wizard — 7 steps → downloadable .zip
 │   └── test/
-│       ├── package.json                    # jsdom dep voor CI generator
-│       └── generate-package.mjs            # Headless extractor for generate + bicep build CI
+│       ├── package.json
+│       └── generate-package.mjs
 │
-├── .github/workflows/
-│   ├── validate.yml                        # PR op infra/: Bicep build + PSRule (blocking) + Checkov (soft-fail)
-│   └── configurator-test.yml               # PR op tools/: JS syntax + generate + Bicep build + PSRule
-│
-├── .azuredevops/                           # ADO pipeline variants (referenced but not primary)
-│   ├── validate.yml
-│   ├── deploy.yml
-│   └── templates/deploy-stage.yml
-│
-└── scripts/
-    └── validate.sh                         # Lokale lint/build helper
+└── .github/workflows/
+    ├── validate.yml                        # PR on infra/: Bicep build + PSRule + Checkov
+    └── configurator-test.yml               # PR on tools/: JS syntax + generate + build + PSRule
 ```
 
-## Snelstart
+## Quick Start
 
-### 1. Klant-specifieke configuratie
+### 1. Customer-Specific Configuration
 
-Pas de `.bicepparam` bestanden aan per omgeving. Alle parameters zijn getypeerd via UDTs — je IDE geeft direct fouten bij ongeldige configuratie.
+Edit the `.bicepparam` files per environment. All parameters are typed via UDTs — your IDE shows errors immediately for invalid configuration.
 
 ```bicep
 // infra/main.dev.bicepparam
 using 'main.bicep'
 
-param customerName = 'mijnklant'
+param customerName = 'mycustomer'
 param environment = 'dev'
 param location = 'westeurope'
 
@@ -104,14 +96,12 @@ param tags = {
   Project: 'aks-platform'
 }
 
-// Feature flags
 param features = {
   deployAcr: true
   deployKeyVault: true
   deployMonitoring: true
 }
 
-// Typed network configuratie
 param networkConfig = {
   vnetAddressPrefix: '10.1.0.0/16'
   aksSubnetPrefix: '10.1.0.0/20'
@@ -119,7 +109,6 @@ param networkConfig = {
   privateEndpointSubnetPrefix: '10.1.17.0/24'
 }
 
-// Typed AKS configuratie — alle velden zijn verplicht (compile-time gecontroleerd)
 param aksConfig = {
   kubernetesVersion: '1.35'
   systemNodeCount: 3
@@ -133,18 +122,19 @@ param aksConfig = {
   enablePrivateCluster: false
   availabilityZones: []
   apiServerAuthorizedIPRanges: []
-  skuTier: 'Free'               // 'Standard' verplicht voor SLA op acc/prod
+  skuTier: 'Free'               // 'Standard' required for SLA on acc/prod
   upgradeChannel: 'patch'
   nodeOSUpgradeChannel: 'NodeImage'
-  osDiskType: 'Ephemeral'
+  osDiskType: 'Managed'
   osDiskSizeGB: 30
   maxPodsPerNode: 50
 }
 
 param adminGroupObjectIds = [
-  // REQUIRED: vervang met Azure AD groep Object ID's.
-  // Gecombineerd met disableLocalAccounts: true op het cluster
-  // veroorzaakt de placeholder hieronder een silent cluster lockout.
+  // REQUIRED: replace with real Entra ID group or user Object ID.
+  // Combined with disableLocalAccounts: true on the cluster,
+  // the placeholder below causes a silent cluster lockout.
+  // Get your user ID: az ad signed-in-user show --query id -o tsv
   '00000000-0000-0000-0000-000000000000'
 ]
 
@@ -153,27 +143,43 @@ param keyVaultSku = 'standard'
 param logRetentionDays = 30
 ```
 
-**Minimaal aan te passen per klant:**
-- `customerName` — korte, lowercase, alfanumeriek
-- `adminGroupObjectIds` — Azure AD groep Object ID's (**niet** de all-zeros placeholder; anders is het cluster na deploy onbereikbaar)
+**Minimum changes per customer:**
+- `customerName` — short, lowercase, alphanumeric
+- `adminGroupObjectIds` — real Entra ID group or user Object IDs (**not** the all-zeros placeholder; otherwise the cluster is unreachable after deploy). Get your ID: `az ad signed-in-user show --query id -o tsv`
 - `tags.CostCenter` / `.Owner` / `.Project`
-- `networkConfig` — VNet en subnet ranges
-- `features` — welke resources nodig zijn
+- `networkConfig` — VNet and subnet ranges
+- `features` — which resources to deploy
 
-### 2. Lokale validatie
+### 2. Local Validation
 
 ```bash
-# Vereist: Azure CLI met Bicep extensie
+# Requires: Azure CLI with Bicep extension
 ./scripts/validate.sh
 ```
 
-Of handmatig:
+Or manually:
 
 ```bash
 az bicep build --file infra/main.bicep
 ```
 
 ### 3. Deployment
+
+The generated zip includes a `deploy.sh` script that handles everything:
+
+```bash
+cd infra
+chmod +x deploy.sh
+./deploy.sh
+```
+
+The script runs 4 steps:
+1. Registers required Azure resource providers
+2. Creates the resource group (needed for what-if validation)
+3. Runs `az deployment sub what-if` to preview changes and catch errors
+4. Asks for confirmation, then deploys with `--no-wait`
+
+Or deploy manually:
 
 ```bash
 az deployment sub create \
@@ -183,60 +189,62 @@ az deployment sub create \
   --name "deploy-dev-001"
 ```
 
-## Configurator wizard
+## Configurator Wizard
 
-`tools/aks-configurator.html` is een zelfstandige browser-tool die het `infra/` pakket genereert op basis van UI-inputs. Geen build step, geen server — open het HTML bestand in een moderne browser.
+`tools/aks-configurator.html` is a standalone browser tool that generates the `infra/` package from UI inputs. No build step, no server — open the HTML file in any modern browser.
 
-De wizard is **in sync** met `infra/`:
-- Emits exact dezelfde Bicep templates (API versions, Cilium + overlay, managed NAT gateway, securityProfile, addons, DCR module, etc.)
-- Bundelt een `BREAKING.md`-stijl waarschuwing in de gegenereerde deployment guide voor users die migreren vanaf pre-Cilium / pre-NAT Gateway clusters
-- Runtime-validator weigert de all-zeros admin GUID placeholder (de reference `.bicepparam` in `infra/` heeft een manuele commentaar waarschuwing)
+The wizard is **in sync** with `infra/`:
+- Emits the exact same Bicep templates (API versions, Cilium + Overlay, user-assigned NAT Gateway, securityProfile, addons, DCR module, etc.)
+- Includes a breaking-change warning in the generated deployment guide for users migrating from pre-Cilium / pre-NAT Gateway clusters
+- Blocks placeholder admin GUIDs at generation time
+- Validates VM size vs OS disk type compatibility (Ephemeral only available on VMs with local storage)
+- Generates a `deploy.sh` with provider registration, resource group creation, what-if validation, and deploy
 
-De CI in `.github/workflows/configurator-test.yml` genereert op elke PR een pakket voor dev/acc/prod, draait `az bicep build` en scant met PSRule. Drift tussen wizard en `infra/` wordt zo afgevangen.
+CI in `.github/workflows/configurator-test.yml` generates a package for dev/acc/prod on every PR, runs `az bicep build`, and scans with PSRule. Drift between wizard and `infra/` is caught automatically.
 
 ## CI/CD
 
 ### GitHub Actions
 
-| Workflow | Trigger | Actie |
+| Workflow | Trigger | Action |
 |---|---|---|
-| `validate.yml` | Pull Request op `infra/**` of `bicepconfig.json` | Bicep build + PSRule (blocking) + Checkov (soft-fail) op elke `.bicepparam` omgeving |
-| `configurator-test.yml` | Pull Request op `tools/aks-configurator.html` of `tools/test/**` | JS syntax check + generate complete pakket voor dev/acc/prod via jsdom + `az bicep build` + PSRule |
+| `validate.yml` | PR on `infra/**` or `bicepconfig.json` | Bicep build + PSRule (blocking) + Checkov (soft-fail) per `.bicepparam` environment |
+| `configurator-test.yml` | PR on `tools/aks-configurator.html` or `tools/test/**` | JS syntax check + generate complete package for dev/acc/prod via jsdom + `az bicep build` + PSRule |
 
-**Beide workflows zijn volledig offline** — geen Azure OIDC, geen secrets. De tidigare `deploy.yml`, `deploy-environment.yml`, `publish-modules.yml` en de `what-if` matrix in `validate.yml` zijn verwijderd omdat op deze tenant geen Entra app registration aangemaakt kan worden voor federated credentials. `git log -- .github/workflows/` toont de history; herstellen vereist de drie secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` plus een tenant admin met App Registration rechten.
+**Both workflows are fully offline** — no Azure OIDC, no secrets. The previous `deploy.yml`, `deploy-environment.yml`, `publish-modules.yml`, and the `what-if` matrix in `validate.yml` were removed because no Entra app registration can be created on this tenant for federated credentials. `git log -- .github/workflows/` shows the history; restoring requires three secrets (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`) plus a tenant admin with App Registration permissions.
 
 ### Azure DevOps
 
-Pipeline definities staan in `.azuredevops/` — zelfde validate-then-deploy pattern, maar niet de primaire CI voor dit repo. Zelfde Entra vereiste geldt voor ADO deployments.
+Pipeline definitions in `.azuredevops/` — same validate-then-deploy pattern, but not the primary CI for this repo. Same Entra requirement applies for ADO deployments.
 
-## PSRule policy
+## PSRule Policy
 
-Blocking op `validate.yml` Lint & Security Scan. `.ps-rule/ps-rule.yaml` bevat:
-- Bicep expansion config + 30s timeout (defaulted van 5s)
-- `pathIgnore` voor `modules/**` + `main.bicep` (alleen entry point via `.bicepparam`)
-- Suppressions voor stale rules die de 2025-10-01 AKS schema niet begrijpen (Azure.AKS.NetworkPolicy / UseRBAC / ContainerInsights / StandardLB / PoolScaleSet / AuditLogs / PlatformLogs), plus environment-gated suppressions voor dev-only gaps (UptimeSLA, AuthorizedIPs, Log.Replication).
-- `suppression-groups.Rule.yaml` — name-pattern matcher voor hash-suffixed ACR namen (`acrcitestdev*` + `acrcontosodev*`).
+Blocking on `validate.yml` Lint & Security Scan. `.ps-rule/ps-rule.yaml` contains:
+- Bicep expansion config + 30s timeout
+- `pathIgnore` for `modules/**` + `main.bicep` (only entry point via `.bicepparam`)
+- Suppressions for rules that don't understand the 2025-10-01 AKS schema, plus environment-gated suppressions for dev-only gaps (UptimeSLA, AuthorizedIPs, Log.Replication)
+- `suppression-groups.Rule.yaml` — name-pattern matcher for hash-suffixed ACR names
 
-Als een nieuwe finding opduikt: fix de finding in de Bicep, niet de suppressions. `continue-on-error: true` is bewust verwijderd.
+If a new finding surfaces: fix the Bicep, not the suppressions. `continue-on-error: true` has been intentionally removed.
 
-## Security highlights
+## Security Highlights
 
-- **Hardened AKS baseline by default** — `sku.tier: Standard` voor acc/prod, autoUpgradeProfile + maintenanceConfigurations, securityProfile.defender + imageCleaner, Cilium + Overlay, managedNATGateway, azureMonitorProfile + DCR (niet de legacy omsagent addon), metricsProfile.costAnalysis, osSKU AzureLinux, osDiskType Ephemeral.
-- **Admin access** — `disableLocalAccounts: true`, `aadProfile.managed` + `enableAzureRBAC`, Azure AD groep via `adminGroupObjectIds`. Placeholder GUID is een bewuste lockout guard — moet vervangen worden vóór deploy.
-- **Workloads → secrets** — OIDC + Workload Identity + `azureKeyvaultSecretsProvider` CSI addon. Kubelet identity krijgt `Key Vault Secrets User` RBAC via `main.bicep`.
-- **Network** — private endpoints voor ACR/KV, managed NAT gateway outbound, NSG outbound deny voor management ports (lateral-traversal guard).
-- **Policy** — `azurepolicy` addon (Gatekeeper) always on.
+- **Hardened AKS baseline by default** — `sku.tier: Standard` for acc/prod, autoUpgradeProfile + maintenanceConfigurations, securityProfile.defender + imageCleaner, Cilium + Overlay, user-assigned NAT Gateway, azureMonitorProfile + DCR, metricsProfile.costAnalysis, osSKU AzureLinux
+- **Admin access** — `disableLocalAccounts: true`, `aadProfile.managed` + `enableAzureRBAC`, Entra ID group via `adminGroupObjectIds`. Placeholder GUID is an intentional lockout guard — must be replaced before deploy
+- **Workloads → secrets** — OIDC + Workload Identity + `azureKeyvaultSecretsProvider` CSI addon. Kubelet identity gets `Key Vault Secrets User` RBAC via `main.bicep`
+- **Network** — private endpoints for ACR/KV, user-assigned NAT Gateway outbound, NSG outbound deny for management ports (lateral-traversal guard)
+- **Policy** — `azurepolicy` addon (Gatekeeper) always on
 
-## Breaking change notice
+## Breaking Change Notice
 
-`networkPluginMode`, `networkDataplane`, `networkPolicy`, `outboundType`, `osSKU`, en `osDiskType` zijn **create-time** properties op `managedClusters`. Redeploy van deze Bicep tegen een bestaand cluster dat op Azure CNI classic / loadBalancer outbound / Ubuntu / Managed disk draaide zal falen. Opties:
-- Blue/green replace (aanbevolen)
-- Edit `infra/modules/aks/aksCluster.bicep` lokaal om het bestaande cluster-profile te matchen vóór de deploy
-- Volg de deployment guide die de configurator wizard genereert — daar staat een rollback-sectie die exact aangeeft welke properties terug te draaien
+`networkPluginMode`, `networkDataplane`, `networkPolicy`, `outboundType`, `osSKU`, and `osDiskType` are **create-time** properties on `managedClusters`. Redeploying this Bicep against an existing cluster that used Azure CNI classic / Load Balancer outbound / Ubuntu / different disk type will fail. Options:
+- Blue/green replace (recommended)
+- Edit `infra/modules/aks/aksCluster.bicep` locally to match the existing cluster profile before deploy
+- Follow the deployment guide generated by the configurator wizard — it has a rollback section listing which properties to revert
 
 ## Extensibility
 
-### Extra role assignments
+### Additional Role Assignments
 
 ```bicep
 param additionalRoleAssignments = [
@@ -248,23 +256,19 @@ param additionalRoleAssignments = [
 ]
 ```
 
-## Aandachtspunten
+## Important Notes
 
-### Private cluster en CI/CD
-Wanneer `aksConfig.enablePrivateCluster: true`, kan een publieke GitHub-hosted runner de AKS API server niet bereiken. Opties:
-- Self-hosted runner in het VNet
-- `apiServerAuthorizedIPRanges` populeren met de runner's uitgaande IPs
-- Geen CI-based deploys maar handmatig via een jumpbox / bastion
+### Ephemeral vs Managed OS Disks
+Dsv5 and Esv5 series VMs do **not** support Ephemeral OS disks (no local cache/temp disk). Use Managed disk type for these VMs, or switch to Ddsv5/Edsv5 series (with local storage) for Ephemeral. The configurator enforces this automatically.
+
+### Private Cluster and CI/CD
+When `aksConfig.enablePrivateCluster: true`, a public GitHub-hosted runner cannot reach the AKS API server. Options:
+- Self-hosted runner in the VNet
+- Populate `apiServerAuthorizedIPRanges` with the runner's outbound IPs
+- Manual deploy via a jumpbox / bastion instead of CI-based deploys
 
 ### ACR Private Endpoints
-Vereisen de **Premium** SKU. Dev gebruikt Standard zonder PE om kosten te besparen.
+Require the **Premium** SKU. Dev uses Standard without PE to save costs.
 
-### Ephemeral OS disk grootte vs VM cache
-`osDiskSizeGB: 30` is de veilige default (Azure minimum) en past binnen de cache van elke VM size in de wizard's lijst. Upgrade bewust: D2s_v5 cache = 50 GB, D4s_v5 = 100 GB, D8s_v5 = 200 GB. Zet `osDiskSizeGB` hoger dan de cache size van je gekozen VM en de deploy faalt.
-
-### Benodigde permissions
-Deploying identity heeft minimaal **Contributor** op subscription scope nodig voor resource group creatie. Voor `azureKeyvaultSecretsProvider` + Defender is ook read access op de Log Analytics workspace ID nodig.
-
-## AKS + Bicep review skill
-
-Voor diepgaande reviews van AKS Bicep is er een Claude Code skill op `~/.claude/skills/azure-aks-bicep-expert/`. Triggert op elke PR die AKS bicep raakt; produceert gestructureerde findings (operational/network/security/cost) met `@file:line` links en live Microsoft Learn references.
+### Required Permissions
+The deploying identity needs at minimum **Contributor** at subscription scope for resource group creation. For `azureKeyvaultSecretsProvider` + Defender, read access on the Log Analytics workspace ID is also required.
