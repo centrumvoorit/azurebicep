@@ -535,6 +535,83 @@ const ECOSYSTEM_TOOLS = {
 };
 
 // ============================================================
+// SHARED ECOSYSTEM TOOL PLAN
+// ============================================================
+
+var BICEP_NATIVE_TOOL_IDS = {
+  'azure-monitor': 1,
+  'azure-policy': 1,
+  'csi-secret-store': 1
+};
+
+function getAllEcosystemTools() {
+  var all = [];
+  var catKeys = Object.keys(ECOSYSTEM_TOOLS);
+  for (var ci = 0; ci < catKeys.length; ci++) {
+    var catTools = ECOSYSTEM_TOOLS[catKeys[ci]].tools;
+    for (var ti = 0; ti < catTools.length; ti++) {
+      all.push(catTools[ti]);
+    }
+  }
+  return all;
+}
+
+function getEcosystemToolPlan(s) {
+  var selected = (s && s.ecosystemTools) ? s.ecosystemTools : {};
+  var allTools = getAllEcosystemTools();
+  var plan = {
+    selected: [],
+    automated: [],
+    manual: [],
+    bicepNative: [],
+    needsHelm: false,
+    hasPostDeployScript: false,
+    hasStarterCommands: false,
+    mode: 'none'
+  };
+
+  for (var i = 0; i < allTools.length; i++) {
+    var tool = allTools[i];
+    if (!selected[tool.id]) continue;
+
+    plan.selected.push(tool);
+
+    if (BICEP_NATIVE_TOOL_IDS[tool.id]) {
+      plan.bicepNative.push(tool);
+      continue;
+    }
+
+    if (!tool.guidance || !tool.guidance.commands || !tool.guidance.commands.length) {
+      continue;
+    }
+
+    if (tool.manualOnly) {
+      plan.manual.push(tool);
+      plan.hasStarterCommands = true;
+    } else {
+      plan.automated.push(tool);
+      if (tool.deployType === 'Helm install') {
+        plan.needsHelm = true;
+      }
+    }
+  }
+
+  plan.hasPostDeployScript = plan.automated.length > 0 || plan.manual.length > 0;
+
+  if (plan.automated.length > 0 && plan.manual.length > 0) {
+    plan.mode = 'mixed';
+  } else if (plan.automated.length > 0) {
+    plan.mode = 'automated-only';
+  } else if (plan.manual.length > 0) {
+    plan.mode = 'manual-only';
+  } else if (plan.bicepNative.length > 0) {
+    plan.mode = 'bicep-native-only';
+  }
+
+  return plan;
+}
+
+// ============================================================
 // BICEP TEMPLATES
 // ============================================================
 
@@ -3641,10 +3718,20 @@ function renderStep6() {
   var validation = validateStep(6);
   var tools = getVal('ecosystemTools') || {};
   var s = getFlatState();
+  var plan = getEcosystemToolPlan(s);
+
+  var step6Intro = 'Select tools to include in your deployment guide.';
+  if (plan.mode === 'manual-only') {
+    step6Intro += ' Manual-only selections will generate starter commands you review and edit before running.';
+  } else if (plan.mode === 'mixed') {
+    step6Intro += ' Automatable tools will be installed by post-deploy automation, while manual tools will include starter commands.';
+  } else {
+    step6Intro += ' Install commands and configuration guidance will be generated for each selected tool.';
+  }
 
   var html = '<h2 class="text-xl font-bold text-gray-800 mb-1">Step 6: Ecosystem Tools</h2>' +
     '<p class="text-sm text-gray-500 mb-4">Select tools to include in your deployment guide.</p>' +
-    infoPanel('Select the tools to include in your deployment guide. Install commands and configuration guidance will be generated for each selected tool.') +
+    infoPanel(step6Intro) +
     '<div class="mt-6"></div>';
 
   var catKeys = Object.keys(ECOSYSTEM_TOOLS);
@@ -3683,8 +3770,16 @@ function renderStep6() {
         '</div>';
       }
 
-      // Guidance preview when enabled
-      var guidanceHtml = isEnabled ? renderToolGuidancePreview(tool, s) : '';
+      // Guidance preview when enabled (Bicep-native tools show inline note instead)
+      var guidanceHtml = '';
+      if (isEnabled) {
+        if (BICEP_NATIVE_TOOL_IDS[tool.id]) {
+          guidanceHtml = '<div class="mt-2 bg-green-50 border border-green-200 rounded p-2">' +
+            '<p class="text-xs text-green-700">Already deployed via Bicep — no post-deploy action needed.</p></div>';
+        } else {
+          guidanceHtml = renderToolGuidancePreview(tool, s);
+        }
+      }
 
       var cardBorder = isEnabled ? 'border-blue-300 bg-blue-50' : 'border-gray-200 bg-white';
 
@@ -3745,29 +3840,14 @@ function renderDeployGuidePanel(s) {
       './deploy.sh') +
     '</div></div>';
 
-  // --- Count automatable vs manual-only ecosystem tools for panel text ---
-  var panelAutoCount = 0;
-  var panelManualCount = 0;
-  var panelBicepNative = { 'azure-monitor': 1, 'azure-policy': 1, 'csi-secret-store': 1 };
-  var panelEcoTools = s.ecosystemTools || {};
-  var panelCatKeys = Object.keys(ECOSYSTEM_TOOLS);
-  for (var pci = 0; pci < panelCatKeys.length; pci++) {
-    var pCatTools = ECOSYSTEM_TOOLS[panelCatKeys[pci]].tools;
-    for (var pti = 0; pti < pCatTools.length; pti++) {
-      var pt = pCatTools[pti];
-      if (!panelEcoTools[pt.id] || panelBicepNative[pt.id]) continue;
-      if (!pt.guidance || !pt.guidance.commands || !pt.guidance.commands.length) continue;
-      if (pt.manualOnly) { panelManualCount++; } else { panelAutoCount++; }
-    }
-  }
+  var plan = getEcosystemToolPlan(s);
 
   // --- Post-deploy tools note (only when ecosystem tools are selected) ---
-  var hasPostDeployTools = generatePostDeployScript(s) !== '';
-  if (hasPostDeployTools) {
+  if (plan.hasPostDeployScript) {
     var panelDesc;
-    if (panelAutoCount > 0 && panelManualCount > 0) {
+    if (plan.mode === 'mixed') {
       panelDesc = 'After deploy.sh completes, run post-deploy-tools.sh. It polls until the deployment succeeds, installs automatable tools, and prints starter commands for tools that require manual configuration.';
-    } else if (panelAutoCount > 0) {
+    } else if (plan.mode === 'automated-only') {
       panelDesc = 'After deploy.sh completes, run post-deploy-tools.sh to install selected ecosystem tools. It polls until the deployment succeeds, then installs and verifies each tool.';
     } else {
       panelDesc = 'After deploy.sh completes, run post-deploy-tools.sh to get cluster credentials. Selected tools require manual configuration — the script prints starter commands to review and edit before running.';
@@ -3859,52 +3939,68 @@ function renderDeployGuidePanel(s) {
       '</div></div>';
   }
 
-  // --- Ecosystem tools ---
-  var tools = s.ecosystemTools || {};
-  var catKeys = Object.keys(ECOSYSTEM_TOOLS);
+  // --- Ecosystem tools (exclude Bicep-native from install cards) ---
+  var installableTools = plan.automated.concat(plan.manual);
   var toolCards = '';
-  for (var ci = 0; ci < catKeys.length; ci++) {
-    var catTools = ECOSYSTEM_TOOLS[catKeys[ci]].tools;
-    for (var ti = 0; ti < catTools.length; ti++) {
-      var tool = catTools[ti];
-      if (!tools[tool.id]) continue;
-      var g = tool.guidance;
-      var cmds = '';
-      if (g && g.commands && g.commands.length) {
-        for (var ci2 = 0; ci2 < g.commands.length; ci2++) {
-          cmds += g.commands[ci2]
-            .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName)
-            .replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName) + '\n';
-        }
-        if (g.verifyCmd) {
-          cmds += '\n# Verify\n' + g.verifyCmd
-            .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName)
-            .replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName);
-        }
+  for (var sti = 0; sti < installableTools.length; sti++) {
+    var tool = installableTools[sti];
+    var g = tool.guidance;
+    var cmds = '';
+    if (g && g.commands && g.commands.length) {
+      for (var ci2 = 0; ci2 < g.commands.length; ci2++) {
+        cmds += g.commands[ci2]
+          .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName)
+          .replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName) + '\n';
       }
-      toolCards += '<div class="border border-gray-200 rounded-lg p-3 mb-2">' +
-        '<div class="flex justify-between items-start mb-2">' +
-          '<div><span class="text-sm font-medium text-gray-700">' + escapeHtml(tool.label) + '</span>' +
-          '<span class="ml-2 px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-700">' + escapeHtml(tool.deployType) + '</span></div></div>';
-      if (cmds) {
-        toolCards += copyableBlock('tool-' + tool.id, escapeHtml(cmds.trim()));
+      if (g.verifyCmd) {
+        cmds += '\n# Verify\n' + g.verifyCmd
+          .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName)
+          .replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName);
       }
-      if (g && g.note) {
-        toolCards += '<p class="text-xs text-gray-500 mt-2">' + escapeHtml(g.note) + '</p>';
-      }
-      toolCards += '</div>';
     }
+    toolCards += '<div class="border border-gray-200 rounded-lg p-3 mb-2">' +
+      '<div class="flex justify-between items-start mb-2">' +
+        '<div><span class="text-sm font-medium text-gray-700">' + escapeHtml(tool.label) + '</span>' +
+        '<span class="ml-2 px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-700">' + escapeHtml(tool.deployType) + '</span>' +
+        (tool.manualOnly ? '<span class="ml-1 px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700">manual</span>' : '') +
+        '</div></div>';
+    if (cmds) {
+      toolCards += copyableBlock('tool-' + tool.id, escapeHtml(cmds.trim()));
+    }
+    if (g && g.note) {
+      toolCards += '<p class="text-xs text-gray-500 mt-2">' + escapeHtml(g.note) + '</p>';
+    }
+    toolCards += '</div>';
   }
   if (toolCards) {
-    var cardSubtext = (panelAutoCount > 0)
-      ? 'Install commands for selected tools. Run after cluster is ready.'
-      : 'Starter commands for selected tools. Review and edit before running.';
+    var cardSubtext;
+    if (plan.mode === 'manual-only') {
+      cardSubtext = 'Starter commands for selected tools. Review and edit before running.';
+    } else if (plan.mode === 'mixed') {
+      cardSubtext = 'Install commands for automatable tools. Manual tools show starter commands to review before running.';
+    } else {
+      cardSubtext = 'Install commands for selected tools. Run after cluster is ready.';
+    }
     html += '<div class="border border-gray-200 rounded-lg mb-4">' +
       '<div class="px-4 py-3 bg-gray-50 border-b border-gray-200 rounded-t-lg">' +
         '<h4 class="text-sm font-semibold text-gray-700">Post-Deploy: Ecosystem Tools</h4>' +
         '<p class="text-xs text-gray-500 mt-1">' + cardSubtext + '</p>' +
       '</div>' +
       '<div class="p-4">' + toolCards + '</div></div>';
+  }
+
+  // --- Bicep-native tools summary in UI ---
+  if (plan.bicepNative.length > 0) {
+    var bicepNativeList = '';
+    for (var bni = 0; bni < plan.bicepNative.length; bni++) {
+      bicepNativeList += '<span class="inline-block px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 mr-1 mb-1">' + escapeHtml(plan.bicepNative[bni].label) + '</span>';
+    }
+    html += '<div class="border border-green-200 rounded-lg mb-4">' +
+      '<div class="px-4 py-3 bg-green-50 border-b border-green-200 rounded-t-lg">' +
+        '<h4 class="text-sm font-semibold text-green-700">Already Deployed via Bicep</h4>' +
+        '<p class="text-xs text-green-600 mt-1">These tools are enabled in the Bicep template and deploy automatically with the cluster.</p>' +
+      '</div>' +
+      '<div class="p-4">' + bicepNativeList + '</div></div>';
   }
 
   // --- Breaking changes notice (collapsible) ---
@@ -4347,6 +4443,7 @@ function generateDeployScript(s) {
   var deployName = 'aks-' + (s.customerName || 'deploy') + '-' + env;
 
   var providers = [
+    'Microsoft.Authorization',
     'Microsoft.ContainerService',
     'Microsoft.Network',
     'Microsoft.ManagedIdentity',
@@ -4504,28 +4601,12 @@ function generatePostDeployScript(s) {
   var rgName = 'rg-' + (s.customerName || 'deploy') + '-' + env + '-' + region;
   var aksName = 'aks-' + (s.customerName || 'deploy') + '-' + env;
   var deployName = 'aks-' + (s.customerName || 'deploy') + '-' + env;
+  var plan = getEcosystemToolPlan(s);
 
-  // Collect selected ecosystem tools (skip Bicep-native ones)
-  var ecoTools = s.ecosystemTools || {};
-  var selectedTools = [];
-  var manualTools = [];
-  var catKeys = Object.keys(ECOSYSTEM_TOOLS);
-  for (var ci = 0; ci < catKeys.length; ci++) {
-    var catTools = ECOSYSTEM_TOOLS[catKeys[ci]].tools;
-    for (var ti = 0; ti < catTools.length; ti++) {
-      var tool = catTools[ti];
-      if (!ecoTools[tool.id]) continue;
-      if (!tool.guidance || !tool.guidance.commands || !tool.guidance.commands.length) continue;
-      if (tool.id === 'azure-monitor' || tool.id === 'azure-policy' || tool.id === 'csi-secret-store') continue;
-      if (tool.manualOnly) {
-        manualTools.push(tool);
-      } else {
-        selectedTools.push(tool);
-      }
-    }
-  }
+  if (!plan.hasPostDeployScript) return '';
 
-  if (selectedTools.length === 0 && manualTools.length === 0) return '';
+  var selectedTools = plan.automated;
+  var manualTools = plan.manual;
 
   var lines = [];
   lines.push('#!/usr/bin/env bash');
@@ -4541,15 +4622,7 @@ function generatePostDeployScript(s) {
   lines.push('DEPLOY_NAME="' + deployName + '"');
   lines.push('');
 
-  // Check if any automatable tool needs Helm
-  var postNeedsHelm = false;
-  for (var hi = 0; hi < selectedTools.length; hi++) {
-    if (selectedTools[hi].deployType === 'Helm install') {
-      postNeedsHelm = true;
-      break;
-    }
-  }
-  if (postNeedsHelm) {
+  if (plan.needsHelm) {
     lines.push('# Pre-check: Helm required');
     lines.push('if ! command -v helm &>/dev/null; then');
     lines.push('  echo "ERROR: helm is not installed. Install from https://helm.sh/docs/intro/install/"');
@@ -4685,6 +4758,7 @@ function generateDeploymentGuide(s) {
   var aksName = 'aks-' + (s.customerName || '{name}') + '-' + (s.environment || '{env}');
   var env = s.environment || 'dev';
   var region = s.location || 'westeurope';
+  var plan = getEcosystemToolPlan(s);
 
   var lines = [];
   lines.push('# AKS Deployment Guide');
@@ -4721,21 +4795,7 @@ function generateDeploymentGuide(s) {
   lines.push('- Sufficient permissions to create resources at subscription scope');
   lines.push('- `kubectl` installed for cluster management');
 
-  // Check if any selected non-manualOnly ecosystem tool uses Helm
-  var guideTools = s.ecosystemTools || {};
-  var guideNeedsHelm = false;
-  var guideCatKeys = Object.keys(ECOSYSTEM_TOOLS);
-  for (var gci = 0; gci < guideCatKeys.length; gci++) {
-    var gcTools = ECOSYSTEM_TOOLS[guideCatKeys[gci]].tools;
-    for (var gti = 0; gti < gcTools.length; gti++) {
-      if (guideTools[gcTools[gti].id] && gcTools[gti].deployType === 'Helm install' && !gcTools[gti].manualOnly) {
-        guideNeedsHelm = true;
-        break;
-      }
-    }
-    if (guideNeedsHelm) break;
-  }
-  if (guideNeedsHelm) {
+  if (plan.needsHelm) {
     lines.push('- Helm 3 installed (`helm version`) — required for selected ecosystem tools');
   }
 
@@ -4756,9 +4816,7 @@ function generateDeploymentGuide(s) {
   lines.push('```');
   lines.push('');
 
-  // Check if post-deploy-tools.sh will be generated
-  var guidePostDeploy = generatePostDeployScript(s);
-  if (guidePostDeploy) {
+  if (plan.hasPostDeployScript) {
     lines.push('After the infrastructure deployment completes, run the post-deploy script:');
     lines.push('');
     lines.push('```bash');
@@ -4767,26 +4825,11 @@ function generateDeploymentGuide(s) {
     lines.push('```');
     lines.push('');
     lines.push('The script polls until the AKS deployment succeeds and gets cluster credentials.');
-    // Count automatable vs manual-only to tailor the description
-    var guideAutoCount = 0;
-    var guideManualCount = 0;
-    var gdCatKeys = Object.keys(ECOSYSTEM_TOOLS);
-    var gdBicepNative = { 'azure-monitor': 1, 'azure-policy': 1, 'csi-secret-store': 1 };
-    var gdEcoTools = s.ecosystemTools || {};
-    for (var gdi = 0; gdi < gdCatKeys.length; gdi++) {
-      var gdCatTools = ECOSYSTEM_TOOLS[gdCatKeys[gdi]].tools;
-      for (var gdj = 0; gdj < gdCatTools.length; gdj++) {
-        var gdt = gdCatTools[gdj];
-        if (!gdEcoTools[gdt.id] || gdBicepNative[gdt.id]) continue;
-        if (!gdt.guidance || !gdt.guidance.commands || !gdt.guidance.commands.length) continue;
-        if (gdt.manualOnly) { guideManualCount++; } else { guideAutoCount++; }
-      }
-    }
-    if (guideAutoCount > 0 && guideManualCount > 0) {
+    if (plan.mode === 'mixed') {
       lines.push('It installs automatable tools directly and prints starter commands for tools that require manual configuration (custom subnet CIDRs, Git repo URLs).');
-    } else if (guideAutoCount > 0) {
+    } else if (plan.mode === 'automated-only') {
       lines.push('It installs each selected tool automatically.');
-    } else {
+    } else if (plan.mode === 'manual-only') {
       lines.push('Selected tools require manual configuration — the script prints starter commands you should review and edit before running.');
     }
     lines.push('');
@@ -4858,77 +4901,62 @@ function generateDeploymentGuide(s) {
     lines.push('');
   }
 
-  // Ecosystem tools
-  var bicepNativeIds = { 'azure-monitor': 1, 'azure-policy': 1, 'csi-secret-store': 1 };
-  var tools = s.ecosystemTools || {};
-  var catKeys = Object.keys(ECOSYSTEM_TOOLS);
+  // Ecosystem tools — driven from the shared plan
+  var installableTools = plan.automated.concat(plan.manual);
   var hasToolSection = false;
-  var hasBicepNativeSection = false;
-  var bicepNativeNames = [];
-  for (var ci = 0; ci < catKeys.length; ci++) {
-    var catTools = ECOSYSTEM_TOOLS[catKeys[ci]].tools;
-    for (var ti = 0; ti < catTools.length; ti++) {
-      var tool = catTools[ti];
-      if (!tools[tool.id]) continue;
 
-      // Bicep-native tools: collect names, don't emit install commands
-      if (bicepNativeIds[tool.id]) {
-        bicepNativeNames.push(tool.label);
-        continue;
-      }
-
-      if (!hasToolSection) {
-        lines.push('## Ecosystem Tools');
-        lines.push('');
-        var guidePostDeployCheck = generatePostDeployScript(s);
-        if (guidePostDeployCheck) {
-          if (guideAutoCount > 0) {
-            lines.push('Run `post-deploy-tools.sh` after deployment to install automatable tools. Tools marked *manual* require editing before running.');
-          } else {
-            lines.push('Run `post-deploy-tools.sh` after deployment to get cluster credentials and view starter commands for manual tools.');
-          }
-          lines.push('');
-        }
-        hasToolSection = true;
-      }
-      var g = tool.guidance;
-
-      lines.push('### ' + tool.label + (tool.manualOnly ? ' *(manual)*' : ''));
+  for (var eti = 0; eti < installableTools.length; eti++) {
+    var tool = installableTools[eti];
+    if (!hasToolSection) {
+      lines.push('## Ecosystem Tools');
       lines.push('');
-      lines.push(tool.description);
-      lines.push('');
-
-      if (g && g.commands && g.commands.length) {
-        lines.push('```bash');
-        for (var ci2 = 0; ci2 < g.commands.length; ci2++) {
-          var cmd = g.commands[ci2]
-            .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName)
-            .replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName);
-          lines.push(cmd);
+      if (plan.hasPostDeployScript) {
+        if (plan.automated.length > 0) {
+          lines.push('Run `post-deploy-tools.sh` after deployment to install automatable tools. Tools marked *manual* require editing before running.');
+        } else {
+          lines.push('Run `post-deploy-tools.sh` after deployment to get cluster credentials and view starter commands for manual tools.');
         }
-        lines.push('```');
         lines.push('');
       }
+      hasToolSection = true;
+    }
+    var g = tool.guidance;
 
-      if (g && g.verifyCmd) {
-        var verifyCmd = g.verifyCmd
+    lines.push('### ' + tool.label + (tool.manualOnly ? ' *(manual)*' : ''));
+    lines.push('');
+    lines.push(tool.description);
+    lines.push('');
+
+    if (g && g.commands && g.commands.length) {
+      lines.push('```bash');
+      for (var ci2 = 0; ci2 < g.commands.length; ci2++) {
+        var cmd = g.commands[ci2]
           .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName)
           .replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName);
-        lines.push('Verify:');
-        lines.push('');
-        lines.push('```bash');
-        lines.push(verifyCmd);
-        lines.push('```');
-        lines.push('');
+        lines.push(cmd);
       }
+      lines.push('```');
+      lines.push('');
+    }
 
-      if (g && g.note) {
-        lines.push('> ' + g.note);
-        lines.push('');
-      }
+    if (g && g.verifyCmd) {
+      var verifyCmd = g.verifyCmd
+        .replace(/<rg>/g, rgName).replace(/<aks>/g, aksName)
+        .replace(/\{rgName\}/g, rgName).replace(/\{aksName\}/g, aksName);
+      lines.push('Verify:');
+      lines.push('');
+      lines.push('```bash');
+      lines.push(verifyCmd);
+      lines.push('```');
+      lines.push('');
+    }
+
+    if (g && g.note) {
+      lines.push('> ' + g.note);
+      lines.push('');
     }
   }
-  if (bicepNativeNames.length > 0) {
+  if (plan.bicepNative.length > 0) {
     if (!hasToolSection) {
       lines.push('## Ecosystem Tools');
       lines.push('');
@@ -4937,8 +4965,8 @@ function generateDeploymentGuide(s) {
     lines.push('');
     lines.push('The following are enabled in the Bicep template and deploy automatically with the cluster — no post-deploy action needed:');
     lines.push('');
-    for (var bni = 0; bni < bicepNativeNames.length; bni++) {
-      lines.push('- ' + bicepNativeNames[bni]);
+    for (var bni = 0; bni < plan.bicepNative.length; bni++) {
+      lines.push('- ' + plan.bicepNative[bni].label);
     }
     lines.push('');
   }
@@ -5252,6 +5280,9 @@ window.__TEST__ = {
   VM_SIZES: VM_SIZES,
   ECOSYSTEM_TOOLS: ECOSYSTEM_TOOLS,
   REGIONS_WITHOUT_ZONES: REGIONS_WITHOUT_ZONES,
+  getEcosystemToolPlan: getEcosystemToolPlan,
+  renderStep6: renderStep6,
+  renderDeployGuidePanel: renderDeployGuidePanel,
   generateBicepParam: generateBicepParam,
   generateDeploymentGuide: generateDeploymentGuide,
   generateDeployScript: generateDeployScript,
