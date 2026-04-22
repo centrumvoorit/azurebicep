@@ -45,7 +45,7 @@ param aksConfig = {
   skuTier: 'Free'
   upgradeChannel: 'patch'
   nodeOSUpgradeChannel: 'NodeImage'
-  osDiskType: 'Ephemeral'
+  osDiskType: 'Managed'
   osDiskSizeGB: 30
   maxPodsPerNode: 50
 }

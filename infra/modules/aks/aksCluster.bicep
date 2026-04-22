@@ -76,7 +76,7 @@ param nodeOSUpgradeChannel string = 'NodeImage'
 
 @description('Node OS disk type')
 @allowed(['Ephemeral', 'Managed'])
-param osDiskType string = 'Ephemeral'
+param osDiskType string = 'Managed'
 
 @description('Node OS disk size in GB')
 @minValue(30)

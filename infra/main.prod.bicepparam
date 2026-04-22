@@ -46,7 +46,7 @@ param aksConfig = {
   skuTier: 'Standard'
   upgradeChannel: 'stable'
   nodeOSUpgradeChannel: 'NodeImage'
-  osDiskType: 'Ephemeral'
+  osDiskType: 'Managed'
   osDiskSizeGB: 30
   maxPodsPerNode: 50
   natGatewayOutboundIpCount: 2
