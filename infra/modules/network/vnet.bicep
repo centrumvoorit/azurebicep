@@ -23,6 +23,9 @@ param servicesSubnetPrefix string
 @description('Address prefix for the private endpoints subnet')
 param privateEndpointSubnetPrefix string
 
+@description('Resource ID of the NAT gateway to associate with the AKS subnet (empty = none)')
+param natGatewayId string = ''
+
 var vnetName = 'vnet-${customerName}-${environment}'
 var aksNsgName = 'nsg-aks-${customerName}-${environment}'
 var servicesNsgName = 'nsg-services-${customerName}-${environment}'
@@ -50,7 +53,7 @@ var denyLateralManagement = {
   }
 }
 
-resource aksNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
+resource aksNsg 'Microsoft.Network/networkSecurityGroups@2025-05-01' = {
   name: aksNsgName
   location: location
   tags: tags
@@ -100,7 +103,7 @@ resource aksNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
   }
 }
 
-resource servicesNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
+resource servicesNsg 'Microsoft.Network/networkSecurityGroups@2025-05-01' = {
   name: servicesNsgName
   location: location
   tags: tags
@@ -137,7 +140,7 @@ resource servicesNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
   }
 }
 
-resource peNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
+resource peNsg 'Microsoft.Network/networkSecurityGroups@2025-05-01' = {
   name: peNsgName
   location: location
   tags: tags
@@ -174,7 +177,7 @@ resource peNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
   }
 }
 
-resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
+resource vnet 'Microsoft.Network/virtualNetworks@2025-05-01' = {
   name: vnetName
   location: location
   tags: tags
@@ -187,12 +190,16 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
     subnets: [
       {
         name: 'snet-aks'
-        properties: {
+        properties: union({
           addressPrefix: aksSubnetPrefix
           networkSecurityGroup: {
             id: aksNsg.id
           }
-        }
+        }, !empty(natGatewayId) ? {
+          natGateway: {
+            id: natGatewayId
+          }
+        } : {})
       }
       {
         name: 'snet-services'

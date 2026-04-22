@@ -49,6 +49,7 @@ param aksConfig = {
   osDiskType: 'Ephemeral'
   osDiskSizeGB: 30
   maxPodsPerNode: 50
+  natGatewayOutboundIpCount: 2
 }
 
 param adminGroupObjectIds = [

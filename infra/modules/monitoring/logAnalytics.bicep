@@ -16,6 +16,9 @@ param environment string
 @maxValue(730)
 param retentionDays int
 
+@description('Daily ingestion cap in GB (-1 = unlimited). Set a cap on dev to avoid runaway costs.')
+param dailyQuotaGb int = -1
+
 var workspaceName = 'log-${customerName}-${environment}'
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2025-07-01' = {
@@ -27,6 +30,9 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2025-07-01' = {
       name: 'PerGB2018'
     }
     retentionInDays: retentionDays
+    workspaceCapping: dailyQuotaGb > 0 ? {
+      dailyQuotaGb: dailyQuotaGb
+    } : null
     // Enable workspace replication to a secondary region for prod/acc (HA
     // requirement, satisfies Azure.Log.Replication). Dev stays single-region
     // to keep costs minimal.

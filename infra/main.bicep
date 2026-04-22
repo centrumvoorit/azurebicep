@@ -70,6 +70,10 @@ var envTags = union(tags, {
   ManagedBy: 'Bicep'
 })
 
+// Resolve conditional module output once to avoid BCP318 on every reference
+#disable-next-line BCP318
+var logAnalyticsWorkspaceId = features.deployMonitoring ? monitoring.outputs.workspaceId : ''
+
 // Well-known Azure role definition GUIDs
 var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 var networkContributorRoleId = '4d97b98b-1d4f-4787-a291-c67834d212e7'
@@ -79,7 +83,7 @@ var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
 // Resource Group
 // ============================================================================
 
-resource rg 'Microsoft.Resources/resourceGroups@2024-11-01' = {
+resource rg 'Microsoft.Resources/resourceGroups@2025-04-01' = {
   name: resourceGroupName
   location: location
   tags: envTags
@@ -88,6 +92,19 @@ resource rg 'Microsoft.Resources/resourceGroups@2024-11-01' = {
 // ============================================================================
 // Modules
 // ============================================================================
+
+module natGateway 'modules/network/natGateway.bicep' = {
+  name: 'natgateway-deployment'
+  scope: rg
+  params: {
+    location: location
+    tags: envTags
+    customerName: customerName
+    environment: environment
+    outboundIpCount: aksConfig.?natGatewayOutboundIpCount ?? 1
+    idleTimeoutMinutes: aksConfig.?natGatewayIdleTimeoutMinutes ?? 4
+  }
+}
 
 module network 'modules/network/vnet.bicep' = {
   name: 'network-deployment'
@@ -101,6 +118,7 @@ module network 'modules/network/vnet.bicep' = {
     aksSubnetPrefix: networkConfig.aksSubnetPrefix
     servicesSubnetPrefix: networkConfig.servicesSubnetPrefix
     privateEndpointSubnetPrefix: networkConfig.privateEndpointSubnetPrefix
+    natGatewayId: natGateway.outputs.natGatewayId
   }
 }
 
@@ -124,6 +142,7 @@ module monitoring 'modules/monitoring/logAnalytics.bicep' = if (features.deployM
     customerName: customerName
     environment: environment
     retentionDays: logRetentionDays
+    dailyQuotaGb: environment == 'dev' ? 1 : -1
   }
 }
 
@@ -138,7 +157,7 @@ module acr 'modules/acr/containerRegistry.bicep' = if (features.deployAcr) {
     acrSku: acrSku
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     vnetId: network.outputs.vnetId
-    logAnalyticsWorkspaceId: features.deployMonitoring ? monitoring.outputs.workspaceId : ''
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
   }
 }
 
@@ -153,7 +172,7 @@ module keyVault 'modules/keyvault/keyVault.bicep' = if (features.deployKeyVault)
     skuName: keyVaultSku
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     vnetId: network.outputs.vnetId
-    logAnalyticsWorkspaceId: features.deployMonitoring ? monitoring.outputs.workspaceId : ''
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
     tenantId: tenant().tenantId
   }
 }
@@ -169,7 +188,7 @@ module aks 'modules/aks/aksCluster.bicep' = {
     environment: environment
     kubernetesVersion: aksConfig.kubernetesVersion
     aksSubnetId: network.outputs.aksSubnetId
-    logAnalyticsWorkspaceId: features.deployMonitoring ? monitoring.outputs.workspaceId : ''
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
     userAssignedIdentityId: identity.outputs.identityId
     enablePrivateCluster: aksConfig.enablePrivateCluster
     systemNodeCount: aksConfig.systemNodeCount
@@ -205,7 +224,7 @@ module dcr 'modules/monitoring/dcr.bicep' = if (features.deployMonitoring) {
     tags: envTags
     customerName: customerName
     environment: environment
-    logAnalyticsWorkspaceId: features.deployMonitoring ? monitoring.outputs.workspaceId : ''
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
     aksClusterName: aks.outputs.aksClusterName
   }
 }
@@ -263,4 +282,4 @@ output aksOidcIssuerUrl string = aks.outputs.aksOidcIssuerUrl
 output vnetId string = network.outputs.vnetId
 output acrLoginServer string = features.deployAcr ? acr.outputs.acrLoginServer : ''
 output keyVaultUri string = features.deployKeyVault ? keyVault.outputs.keyVaultUri : ''
-output logAnalyticsWorkspaceId string = features.deployMonitoring ? monitoring.outputs.workspaceId : ''
+output logAnalyticsWorkspaceId string = logAnalyticsWorkspaceId

@@ -24,10 +24,11 @@ param vnetId string
 @description('Resource ID of the Log Analytics workspace')
 param logAnalyticsWorkspaceId string
 
-// ACR names cannot contain hyphens and must be globally unique
-var acrName = 'acr${take(toLower(customerName), 8)}${environment}${take(uniqueString(resourceGroup().id), 8)}'
+// ACR names must be alphanumeric (no hyphens) and globally unique
+var sanitizedCustomerName = replace(toLower(customerName), '-', '')
+var acrName = 'acr${take(sanitizedCustomerName, 8)}${environment}${take(uniqueString(resourceGroup().id), 8)}'
 
-resource acr 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
+resource acr 'Microsoft.ContainerRegistry/registries@2025-11-01' = {
   name: acrName
   location: location
   tags: tags
@@ -52,7 +53,7 @@ resource acr 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
 // satisfies Azure.ACR.GeoReplica and keeps image pulls available during a
 // region-level outage. One pair (westeurope, northeurope) for cost control;
 // add more replicas in a separate PR if global reach is needed.
-resource acrGeoReplica 'Microsoft.ContainerRegistry/registries/replications@2025-04-01' = if (acrSku == 'Premium' && (environment == 'prod' || environment == 'acc')) {
+resource acrGeoReplica 'Microsoft.ContainerRegistry/registries/replications@2025-11-01' = if (acrSku == 'Premium' && (environment == 'prod' || environment == 'acc')) {
   parent: acr
   name: 'northeurope'
   location: 'northeurope'
@@ -62,6 +63,7 @@ resource acrGeoReplica 'Microsoft.ContainerRegistry/registries/replications@2025
   }
 }
 
+#disable-next-line use-recent-api-versions
 resource diagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logAnalyticsWorkspaceId)) {
   name: '${acrName}-diag'
   scope: acr
