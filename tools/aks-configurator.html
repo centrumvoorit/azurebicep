@@ -1043,7 +1043,7 @@ param serviceCidr string = '10.0.0.0/16'
 
 var aksName = 'aks-\${customerName}-\${environment}'
 
-resource aksCluster 'Microsoft.ContainerService/managedClusters@2026-01-01' = {
+resource aksCluster 'Microsoft.ContainerService/managedClusters@2025-10-01' = {
   name: aksName
   location: location
   tags: tags
@@ -1199,7 +1199,7 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2026-01-01' = {
   }
 }
 
-resource maintenanceAutoUpgrade 'Microsoft.ContainerService/managedClusters/maintenanceConfigurations@2026-01-01' = {
+resource maintenanceAutoUpgrade 'Microsoft.ContainerService/managedClusters/maintenanceConfigurations@2025-10-01' = {
   parent: aksCluster
   name: 'aksManagedAutoUpgradeSchedule'
   properties: {
@@ -1217,7 +1217,7 @@ resource maintenanceAutoUpgrade 'Microsoft.ContainerService/managedClusters/main
   }
 }
 
-resource maintenanceNodeOS 'Microsoft.ContainerService/managedClusters/maintenanceConfigurations@2026-01-01' = {
+resource maintenanceNodeOS 'Microsoft.ContainerService/managedClusters/maintenanceConfigurations@2025-10-01' = {
   parent: aksCluster
   name: 'aksManagedNodeOSUpgradeSchedule'
   properties: {
@@ -1284,7 +1284,7 @@ param aksClusterName string
 
 var dcrName = 'dcr-\${customerName}-\${environment}-ci'
 
-resource aksExisting 'Microsoft.ContainerService/managedClusters@2026-01-01' existing = {
+resource aksExisting 'Microsoft.ContainerService/managedClusters@2025-10-01' existing = {
   name: aksClusterName
 }
 
@@ -1597,8 +1597,9 @@ param vnetId string
 @description('Resource ID of the Log Analytics workspace')
 param logAnalyticsWorkspaceId string
 
-// ACR names cannot contain hyphens and must be globally unique
-var acrName = 'acr\${take(toLower(customerName), 8)}\${environment}\${take(uniqueString(resourceGroup().id), 8)}'
+// ACR names must be alphanumeric (no hyphens) and globally unique
+var sanitizedCustomerName = replace(toLower(customerName), '-', '')
+var acrName = 'acr\${take(sanitizedCustomerName, 8)}\${environment}\${take(uniqueString(resourceGroup().id), 8)}'
 
 resource acr 'Microsoft.ContainerRegistry/registries@2025-11-01' = {
   name: acrName

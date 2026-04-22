@@ -19,7 +19,7 @@ param aksClusterName string
 
 var dcrName = 'dcr-${customerName}-${environment}-ci'
 
-resource aksExisting 'Microsoft.ContainerService/managedClusters@2026-01-01' existing = {
+resource aksExisting 'Microsoft.ContainerService/managedClusters@2025-10-01' existing = {
   name: aksClusterName
 }
 

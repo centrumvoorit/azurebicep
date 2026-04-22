@@ -108,7 +108,7 @@ param serviceCidr string = '10.0.0.0/16'
 
 var aksName = 'aks-${customerName}-${environment}'
 
-resource aksCluster 'Microsoft.ContainerService/managedClusters@2026-01-01' = {
+resource aksCluster 'Microsoft.ContainerService/managedClusters@2025-10-01' = {
   name: aksName
   location: location
   tags: tags
@@ -264,7 +264,7 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2026-01-01' = {
   }
 }
 
-resource maintenanceAutoUpgrade 'Microsoft.ContainerService/managedClusters/maintenanceConfigurations@2026-01-01' = {
+resource maintenanceAutoUpgrade 'Microsoft.ContainerService/managedClusters/maintenanceConfigurations@2025-10-01' = {
   parent: aksCluster
   name: 'aksManagedAutoUpgradeSchedule'
   properties: {
@@ -282,7 +282,7 @@ resource maintenanceAutoUpgrade 'Microsoft.ContainerService/managedClusters/main
   }
 }
 
-resource maintenanceNodeOS 'Microsoft.ContainerService/managedClusters/maintenanceConfigurations@2026-01-01' = {
+resource maintenanceNodeOS 'Microsoft.ContainerService/managedClusters/maintenanceConfigurations@2025-10-01' = {
   parent: aksCluster
   name: 'aksManagedNodeOSUpgradeSchedule'
   properties: {
