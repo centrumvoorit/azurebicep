@@ -405,14 +405,14 @@ console.log('16. validateAllSteps aggregates all steps');
 }
 
 // ----------------------------------------------------------
-// 17. manualOnly tools excluded from post-deploy automation
+// 17. postDeployManual tools excluded from post-deploy automation
 // ----------------------------------------------------------
-console.log('17. manualOnly tools excluded from post-deploy automation');
+console.log('17. postDeployManual tools excluded from post-deploy automation');
 {
   const dom = createDom();
   const T = dom.window.__TEST__;
 
-  // AGIC and Flux are manualOnly — should not appear as executable commands
+  // AGIC and Flux are postDeployManual — should not appear as executable commands
   const script = T.generatePostDeployScript({
     customerName: 'testco', environment: 'dev', location: 'westeurope',
     ecosystemTools: { agic: true, flux: true, nginx: true },
@@ -479,9 +479,9 @@ console.log('19. Deploy script always uses --no-wait');
 }
 
 // ----------------------------------------------------------
-// 20. Linkerd is manualOnly
+// 20. Linkerd is postDeployManual
 // ----------------------------------------------------------
-console.log('20. Linkerd is manualOnly');
+console.log('20. Linkerd is postDeployManual');
 {
   const dom = createDom();
   const T = dom.window.__TEST__;
@@ -504,6 +504,7 @@ console.log('20. Linkerd is manualOnly');
     }
   }
   assert(linkerdTool.deployType === 'CLI install', 'Linkerd deployType should be CLI install, not Helm install');
+  assert(linkerdTool.deliveryMode === 'postDeployManual', 'Linkerd deliveryMode should be postDeployManual');
 
   dom.window.close();
 }
@@ -597,7 +598,7 @@ console.log('24. Linkerd-only does not add Helm prerequisite to guide');
     customerName: 'testco', environment: 'dev', location: 'westeurope',
     ecosystemTools: { linkerd: true },
   });
-  assert(!guide.includes('Helm 3'), 'Guide should NOT list Helm for Linkerd-only (manualOnly tool)');
+  assert(!guide.includes('Helm 3'), 'Guide should NOT list Helm for Linkerd-only (postDeployManual tool)');
   dom.window.close();
 }
 
@@ -767,6 +768,38 @@ console.log('32. Deploy script includes Microsoft.Authorization provider');
     customerName: 'testco', environment: 'dev', location: 'westeurope',
   });
   assert(script.includes('Microsoft.Authorization'), 'Deploy script should register Microsoft.Authorization provider');
+
+  dom.window.close();
+}
+
+// ----------------------------------------------------------
+// 33. Every tool has a valid deliveryMode
+// ----------------------------------------------------------
+console.log('33. Every tool has a valid deliveryMode');
+{
+  const dom = createDom();
+  const T = dom.window.__TEST__;
+  const tools = T.ECOSYSTEM_TOOLS;
+  const validModes = ['bicep', 'postDeployAuto', 'postDeployManual'];
+
+  for (const catKey of Object.keys(tools)) {
+    for (const t of tools[catKey].tools) {
+      assert(validModes.includes(t.deliveryMode),
+        t.id + ' should have a valid deliveryMode, got: ' + t.deliveryMode);
+    }
+  }
+
+  const plan = T.getEcosystemToolPlan({
+    ecosystemTools: { 'azure-monitor': true, 'azure-policy': true, 'csi-secret-store': true }
+  });
+  assert(plan.bicepNative.length === 3, 'All three bicep-mode tools should be in bicepNative');
+  assert(plan.mode === 'bicep-native-only', 'Mode should be bicep-native-only');
+
+  const plan2 = T.getEcosystemToolPlan({
+    ecosystemTools: { linkerd: true, agic: true }
+  });
+  assert(plan2.manual.length === 2, 'linkerd + agic should both be manual');
+  assert(plan2.mode === 'manual-only', 'Mode should be manual-only');
 
   dom.window.close();
 }
