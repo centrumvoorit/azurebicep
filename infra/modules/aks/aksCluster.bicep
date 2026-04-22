@@ -237,9 +237,6 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2025-10-01' = {
         enabled: true
         intervalHours: 24
       }
-      nodeRestriction: {
-        enabled: true
-      }
     }, !empty(logAnalyticsWorkspaceId) ? {
       defender: {
         logAnalyticsWorkspaceResourceId: logAnalyticsWorkspaceId
