@@ -4304,23 +4304,28 @@ function generateDeployScript(s) {
   lines.push('echo "==> [3/4] Running what-if preview (validates quota, regions, SKUs, policies)..."');
   lines.push('echo ""');
   lines.push('');
+  lines.push('WHATIF_OK=true');
   lines.push('if ! az deployment sub what-if \\');
   lines.push('  --name "$DEPLOY_NAME" \\');
   lines.push('  --location "$LOCATION" \\');
   lines.push('  --template-file main.bicep \\');
   lines.push('  --parameters "$PARAM_FILE"; then');
-  lines.push('  echo ""');
-  lines.push('  echo "==> What-if FAILED. Fix the errors above before deploying."');
-  lines.push('  exit 1');
+  lines.push('  WHATIF_OK=false');
   lines.push('fi');
   lines.push('');
 
-  // --- Step 3: Confirm + Deploy ---
+  // --- Step 4: Confirm + Deploy ---
   lines.push('# -------------------------------------------------------');
-  lines.push('# Step 3: Confirm and deploy');
+  lines.push('# Step 4: Confirm and deploy');
   lines.push('# -------------------------------------------------------');
   lines.push('echo ""');
-  lines.push('echo "==> [4/4] What-if passed. Review the changes above."');
+  lines.push('if [ "$WHATIF_OK" = true ]; then');
+  lines.push('  echo "==> [4/4] What-if passed. Review the changes above."');
+  lines.push('else');
+  lines.push('  echo "==> [4/4] What-if reported errors (see above)."');
+  lines.push('  echo "    Known false positive: AKS preflight fails when Log Analytics workspace"');
+  lines.push('  echo "    does not exist yet. The actual deployment creates it first."');
+  lines.push('fi');
   lines.push('echo ""');
   lines.push('read -rp "Deploy now? [y/N] " confirm');
   lines.push('if [[ ! "$confirm" =~ ^[Yy]$ ]]; then');
