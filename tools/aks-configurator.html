@@ -535,6 +535,83 @@ const ECOSYSTEM_TOOLS = {
 };
 
 // ============================================================
+// SHARED ECOSYSTEM TOOL PLAN
+// ============================================================
+
+var BICEP_NATIVE_TOOL_IDS = {
+  'azure-monitor': 1,
+  'azure-policy': 1,
+  'csi-secret-store': 1
+};
+
+function getAllEcosystemTools() {
+  var all = [];
+  var catKeys = Object.keys(ECOSYSTEM_TOOLS);
+  for (var ci = 0; ci < catKeys.length; ci++) {
+    var catTools = ECOSYSTEM_TOOLS[catKeys[ci]].tools;
+    for (var ti = 0; ti < catTools.length; ti++) {
+      all.push(catTools[ti]);
+    }
+  }
+  return all;
+}
+
+function getEcosystemToolPlan(s) {
+  var selected = (s && s.ecosystemTools) ? s.ecosystemTools : {};
+  var allTools = getAllEcosystemTools();
+  var plan = {
+    selected: [],
+    automated: [],
+    manual: [],
+    bicepNative: [],
+    needsHelm: false,
+    hasPostDeployScript: false,
+    hasStarterCommands: false,
+    mode: 'none'
+  };
+
+  for (var i = 0; i < allTools.length; i++) {
+    var tool = allTools[i];
+    if (!selected[tool.id]) continue;
+
+    plan.selected.push(tool);
+
+    if (BICEP_NATIVE_TOOL_IDS[tool.id]) {
+      plan.bicepNative.push(tool);
+      continue;
+    }
+
+    if (!tool.guidance || !tool.guidance.commands || !tool.guidance.commands.length) {
+      continue;
+    }
+
+    if (tool.manualOnly) {
+      plan.manual.push(tool);
+      plan.hasStarterCommands = true;
+    } else {
+      plan.automated.push(tool);
+      if (tool.deployType === 'Helm install') {
+        plan.needsHelm = true;
+      }
+    }
+  }
+
+  plan.hasPostDeployScript = plan.automated.length > 0 || plan.manual.length > 0;
+
+  if (plan.automated.length > 0 && plan.manual.length > 0) {
+    plan.mode = 'mixed';
+  } else if (plan.automated.length > 0) {
+    plan.mode = 'automated-only';
+  } else if (plan.manual.length > 0) {
+    plan.mode = 'manual-only';
+  } else if (plan.bicepNative.length > 0) {
+    plan.mode = 'bicep-native-only';
+  }
+
+  return plan;
+}
+
+// ============================================================
 // BICEP TEMPLATES
 // ============================================================
 
@@ -5252,6 +5329,7 @@ window.__TEST__ = {
   VM_SIZES: VM_SIZES,
   ECOSYSTEM_TOOLS: ECOSYSTEM_TOOLS,
   REGIONS_WITHOUT_ZONES: REGIONS_WITHOUT_ZONES,
+  getEcosystemToolPlan: getEcosystemToolPlan,
   generateBicepParam: generateBicepParam,
   generateDeploymentGuide: generateDeploymentGuide,
   generateDeployScript: generateDeployScript,

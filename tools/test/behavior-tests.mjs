@@ -620,6 +620,49 @@ console.log('25. Manual-only tools adapt guide language');
 }
 
 // ----------------------------------------------------------
+// 26. Ecosystem tool plan groups tools by execution mode
+// ----------------------------------------------------------
+console.log('26. Ecosystem tool plan groups tools by execution mode');
+{
+  const dom = createDom();
+  const T = dom.window.__TEST__;
+
+  const plan = T.getEcosystemToolPlan({
+    ecosystemTools: { nginx: true, linkerd: true, 'azure-policy': true },
+  });
+
+  assert(plan.mode === 'mixed', 'Plan mode should be mixed');
+  assert(plan.automated.length === 1, 'Plan should classify nginx as automated');
+  assert(plan.manual.length === 1, 'Plan should classify linkerd as manual');
+  assert(plan.bicepNative.length === 1, 'Plan should classify azure-policy as Bicep-native');
+  assert(plan.needsHelm === true, 'Plan should require Helm when Helm automation is selected');
+  assert(plan.hasPostDeployScript === true, 'Plan should emit post-deploy script when manual or automated tools exist');
+
+  dom.window.close();
+}
+
+// ----------------------------------------------------------
+// 27. Ecosystem tool plan detects bicep-native-only mode
+// ----------------------------------------------------------
+console.log('27. Ecosystem tool plan detects bicep-native-only mode');
+{
+  const dom = createDom();
+  const T = dom.window.__TEST__;
+
+  const plan = T.getEcosystemToolPlan({
+    ecosystemTools: { 'azure-monitor': true, 'azure-policy': true },
+  });
+
+  assert(plan.mode === 'bicep-native-only', 'Plan mode should be bicep-native-only');
+  assert(plan.automated.length === 0, 'Bicep-native-only plan should have no automated tools');
+  assert(plan.manual.length === 0, 'Bicep-native-only plan should have no manual tools');
+  assert(plan.bicepNative.length === 2, 'Bicep-native-only plan should track selected add-ons');
+  assert(plan.hasPostDeployScript === false, 'Bicep-native-only plan should not emit post-deploy script');
+
+  dom.window.close();
+}
+
+// ----------------------------------------------------------
 // Summary
 // ----------------------------------------------------------
 console.log('\n' + '='.repeat(50));
