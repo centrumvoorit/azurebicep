@@ -74,14 +74,22 @@ const STEPS = [
 ];
 
 const VM_SIZES = [
-  { name: 'Standard_D2s_v5', vCPU: 2, ram: 8 },
-  { name: 'Standard_D4s_v5', vCPU: 4, ram: 16 },
-  { name: 'Standard_D8s_v5', vCPU: 8, ram: 32 },
-  { name: 'Standard_D16s_v5', vCPU: 16, ram: 64 },
-  { name: 'Standard_E2s_v5', vCPU: 2, ram: 16 },
-  { name: 'Standard_E4s_v5', vCPU: 4, ram: 32 },
-  { name: 'Standard_E8s_v5', vCPU: 8, ram: 64 },
-  { name: 'Standard_E16s_v5', vCPU: 16, ram: 128 }
+  { name: 'Standard_D2s_v5', vCPU: 2, ram: 8, ephemeral: false },
+  { name: 'Standard_D4s_v5', vCPU: 4, ram: 16, ephemeral: false },
+  { name: 'Standard_D8s_v5', vCPU: 8, ram: 32, ephemeral: false },
+  { name: 'Standard_D16s_v5', vCPU: 16, ram: 64, ephemeral: false },
+  { name: 'Standard_D2ds_v5', vCPU: 2, ram: 8, ephemeral: true },
+  { name: 'Standard_D4ds_v5', vCPU: 4, ram: 16, ephemeral: true },
+  { name: 'Standard_D8ds_v5', vCPU: 8, ram: 32, ephemeral: true },
+  { name: 'Standard_D16ds_v5', vCPU: 16, ram: 64, ephemeral: true },
+  { name: 'Standard_E2s_v5', vCPU: 2, ram: 16, ephemeral: false },
+  { name: 'Standard_E4s_v5', vCPU: 4, ram: 32, ephemeral: false },
+  { name: 'Standard_E8s_v5', vCPU: 8, ram: 64, ephemeral: false },
+  { name: 'Standard_E16s_v5', vCPU: 16, ram: 128, ephemeral: false },
+  { name: 'Standard_E2ds_v5', vCPU: 2, ram: 16, ephemeral: true },
+  { name: 'Standard_E4ds_v5', vCPU: 4, ram: 32, ephemeral: true },
+  { name: 'Standard_E8ds_v5', vCPU: 8, ram: 64, ephemeral: true },
+  { name: 'Standard_E16ds_v5', vCPU: 16, ram: 128, ephemeral: true }
 ];
 
 const REGIONS = [
@@ -120,7 +128,7 @@ const ENV_DEFAULTS = {
     userNodeCount: 3,
     userNodeMinCount: 3,
     userNodeMaxCount: 5,
-    osDiskType: 'Ephemeral',
+    osDiskType: 'Managed',
     osDiskSizeGB: 30,
     availabilityZones: [],
     upgradeChannel: 'patch',
@@ -158,7 +166,7 @@ const ENV_DEFAULTS = {
     userNodeCount: 3,
     userNodeMinCount: 3,
     userNodeMaxCount: 8,
-    osDiskType: 'Ephemeral',
+    osDiskType: 'Managed',
     osDiskSizeGB: 30,
     availabilityZones: ['1', '2', '3'],
     upgradeChannel: 'stable',
@@ -196,7 +204,7 @@ const ENV_DEFAULTS = {
     userNodeCount: 3,
     userNodeMinCount: 3,
     userNodeMaxCount: 12,
-    osDiskType: 'Ephemeral',
+    osDiskType: 'Managed',
     osDiskSizeGB: 30,
     availabilityZones: ['1', '2', '3'],
     upgradeChannel: 'stable',
@@ -1023,7 +1031,7 @@ param nodeOSUpgradeChannel string = 'NodeImage'
 
 @description('Node OS disk type')
 @allowed(['Ephemeral', 'Managed'])
-param osDiskType string = 'Ephemeral'
+param osDiskType string = 'Managed'
 
 @description('Node OS disk size in GB')
 @minValue(30)
@@ -2186,6 +2194,31 @@ function getVmVcpu(vmSize) {
   return 2;
 }
 
+function vmSupportsEphemeral(vmSize) {
+  for (var i = 0; i < VM_SIZES.length; i++) {
+    if (VM_SIZES[i].name === vmSize) return VM_SIZES[i].ephemeral;
+  }
+  return false;
+}
+
+function enforceOsDiskType() {
+  var sysVm = getVal('systemNodeVmSize') || 'Standard_D2s_v5';
+  var usrVm = getVal('userNodeVmSize') || 'Standard_D4s_v5';
+  var canEphemeral = vmSupportsEphemeral(sysVm) && vmSupportsEphemeral(usrVm);
+  var sel = document.getElementById('osDiskTypeSelect');
+  if (!sel) return;
+  var ephOpt = sel.querySelector('option[value="Ephemeral"]');
+  if (!canEphemeral) {
+    if (ephOpt) ephOpt.disabled = true;
+    if (sel.value === 'Ephemeral') {
+      sel.value = 'Managed';
+      setVal('osDiskType', 'Managed');
+    }
+  } else {
+    if (ephOpt) ephOpt.disabled = false;
+  }
+}
+
 // ============================================================
 // VALIDATION
 // ============================================================
@@ -2545,6 +2578,7 @@ function renderCurrentStep() {
     case 7: html = renderStep7(); break;
   }
   main.innerHTML = html;
+  if (currentStep === 4) enforceOsDiskType();
 }
 
 function updateNavButtons() {
@@ -3154,7 +3188,7 @@ function renderStep4() {
   var userMax = getVal('userNodeMaxCount') !== undefined ? getVal('userNodeMaxCount') : 5;
 
   var osDisk = getVal('osDiskSizeGB') !== undefined ? getVal('osDiskSizeGB') : 128;
-  var osDiskType = getVal('osDiskType') || 'Ephemeral';
+  var osDiskType = getVal('osDiskType') || 'Managed';
   var zones = getVal('availabilityZones') || [];
   var upgradeChannel = getVal('upgradeChannel') || 'patch';
   var maxPods = getVal('maxPodsPerNode') !== undefined ? getVal('maxPodsPerNode') : 110;
@@ -3164,7 +3198,7 @@ function renderStep4() {
     var opts = '';
     for (var i = 0; i < VM_SIZES.length; i++) {
       var vm = VM_SIZES[i];
-      var label = vm.name + ' (' + vm.vCPU + ' vCPU / ' + vm.ram + ' GB RAM)';
+      var label = vm.name + ' (' + vm.vCPU + ' vCPU / ' + vm.ram + ' GB RAM' + (vm.ephemeral ? ' + local disk' : '') + ')';
       opts += '<option value="' + vm.name + '"' + (vm.name === selectedName ? ' selected' : '') + '>' + label + '</option>';
     }
     return opts;
@@ -3244,7 +3278,7 @@ function renderStep4() {
       '<p class="text-xs text-gray-500 mb-4">Hosts Kubernetes system components (kube-system). Requires at least 1 node at all times.</p>' +
 
       fieldRow('VM Size',
-        '<select onchange="setValNow(\'systemNodeVmSize\', this.value)" class="' + inputCls + '">' + vmSizeOptions(sysVmSize) + '</select>',
+        '<select onchange="setValNow(\'systemNodeVmSize\', this.value); enforceOsDiskType()" class="' + inputCls + '">' + vmSizeOptions(sysVmSize) + '</select>',
         'params',
         'Virtual machine size for system pool nodes.') +
 
@@ -3260,7 +3294,7 @@ function renderStep4() {
       '<p class="text-xs text-gray-500 mb-4">Hosts application workloads. Can be scaled independently from the system pool.</p>' +
 
       fieldRow('VM Size',
-        '<select onchange="setValNow(\'userNodeVmSize\', this.value)" class="' + inputCls + '">' + vmSizeOptions(userVmSize) + '</select>',
+        '<select onchange="setValNow(\'userNodeVmSize\', this.value); enforceOsDiskType()" class="' + inputCls + '">' + vmSizeOptions(userVmSize) + '</select>',
         'params',
         'Virtual machine size for user pool nodes.') +
 
@@ -3275,12 +3309,12 @@ function renderStep4() {
       '<h3 class="text-base font-semibold text-gray-700 mb-4">Shared Settings</h3>' +
 
       fieldRow('OS Disk Type',
-        '<select onchange="setVal(\'osDiskType\', this.value)" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500">' +
+        '<select id="osDiskTypeSelect" onchange="setVal(\'osDiskType\', this.value)" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500">' +
           '<option value="Ephemeral"' + (osDiskType === 'Ephemeral' ? ' selected' : '') + '>Ephemeral</option>' +
           '<option value="Managed"' + (osDiskType === 'Managed' ? ' selected' : '') + '>Managed</option>' +
         '</select>',
         'params',
-        'Ephemeral uses the VM cache disk (faster, no storage cost, but limited by VM cache size). Managed uses a separate managed disk. Use Managed for small VMs like Standard_D2s_v5.') +
+        'Ephemeral uses the VM temp/cache disk (faster, no storage cost). Only available on VM sizes with local storage (Dds_v5, Eads_v5, etc.). Dsv5/Esv5 series require Managed.') +
 
       fieldRow('OS Disk Size (GB)',
         '<div class="flex items-center gap-4">' +
