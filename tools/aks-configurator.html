@@ -753,6 +753,19 @@ resource rg 'Microsoft.Resources/resourceGroups@2025-04-01' = {
 // Modules
 // ============================================================================
 
+module natGateway 'modules/network/natGateway.bicep' = {
+  name: 'natgateway-deployment'
+  scope: rg
+  params: {
+    location: location
+    tags: envTags
+    customerName: customerName
+    environment: environment
+    outboundIpCount: aksConfig.?natGatewayOutboundIpCount ?? 1
+    idleTimeoutMinutes: aksConfig.?natGatewayIdleTimeoutMinutes ?? 4
+  }
+}
+
 module network 'modules/network/vnet.bicep' = {
   name: 'network-deployment'
   scope: rg
@@ -765,6 +778,7 @@ module network 'modules/network/vnet.bicep' = {
     aksSubnetPrefix: networkConfig.aksSubnetPrefix
     servicesSubnetPrefix: networkConfig.servicesSubnetPrefix
     privateEndpointSubnetPrefix: networkConfig.privateEndpointSubnetPrefix
+    natGatewayId: natGateway.outputs.natGatewayId
   }
 }
 
@@ -854,8 +868,6 @@ module aks 'modules/aks/aksCluster.bicep' = {
     osDiskSizeGB: aksConfig.osDiskSizeGB
     maxPodsPerNode: aksConfig.maxPodsPerNode
     adminGroupObjectIds: adminGroupObjectIds
-    natGatewayOutboundIpCount: aksConfig.?natGatewayOutboundIpCount ?? 1
-    natGatewayIdleTimeoutMinutes: aksConfig.?natGatewayIdleTimeoutMinutes ?? 4
   }
 }
 
@@ -1025,16 +1037,6 @@ param maxPodsPerNode int = 50
 @description('Azure AD admin group object IDs for cluster admin access')
 param adminGroupObjectIds array
 
-@description('Number of managed outbound public IPs for NAT gateway (each provides ~64k SNAT ports)')
-@minValue(1)
-@maxValue(16)
-param natGatewayOutboundIpCount int = 1
-
-@description('NAT gateway idle timeout in minutes')
-@minValue(4)
-@maxValue(120)
-param natGatewayIdleTimeoutMinutes int = 4
-
 @description('DNS service IP address (must be within serviceCidr)')
 param dnsServiceIP string = '10.0.0.10'
 
@@ -1081,13 +1083,7 @@ resource aksCluster 'Microsoft.ContainerService/managedClusters@2025-10-01' = {
       networkPolicy: 'cilium'
       serviceCidr: serviceCidr
       dnsServiceIP: dnsServiceIP
-      outboundType: 'managedNATGateway'
-      natGatewayProfile: {
-        managedOutboundIPProfile: {
-          count: natGatewayOutboundIpCount
-        }
-        idleTimeoutInMinutes: natGatewayIdleTimeoutMinutes
-      }
+      outboundType: 'userAssignedNATGateway'
     }
     agentPoolProfiles: [
       {
@@ -1342,6 +1338,65 @@ resource dcrAssociation 'Microsoft.Insights/dataCollectionRuleAssociations@2024-
 output dcrId string = dcr.id
 `,
 
+  'modules/network/natGateway.bicep': `@description('Azure region for all resources')
+param location string
+
+@description('Tags to apply to all resources')
+param tags object
+
+@description('Customer name used in resource naming')
+param customerName string
+
+@description('Environment name (dev, acc, prod)')
+@allowed(['dev', 'acc', 'prod'])
+param environment string
+
+@description('Number of outbound public IPs (each provides ~64k SNAT ports)')
+@minValue(1)
+@maxValue(16)
+param outboundIpCount int = 1
+
+@description('NAT gateway idle timeout in minutes')
+@minValue(4)
+@maxValue(120)
+param idleTimeoutMinutes int = 4
+
+var natGatewayName = 'natgw-\${customerName}-\${environment}'
+
+resource publicIps 'Microsoft.Network/publicIPAddresses@2025-05-01' = [
+  for i in range(0, outboundIpCount): {
+    name: '\${natGatewayName}-pip-\${i}'
+    location: location
+    tags: tags
+    sku: {
+      name: 'Standard'
+    }
+    properties: {
+      publicIPAllocationMethod: 'Static'
+    }
+  }
+]
+
+resource natGateway 'Microsoft.Network/natGateways@2025-05-01' = {
+  name: natGatewayName
+  location: location
+  tags: tags
+  sku: {
+    name: 'Standard'
+  }
+  properties: {
+    idleTimeoutInMinutes: idleTimeoutMinutes
+    publicIpAddresses: [
+      for i in range(0, outboundIpCount): {
+        id: publicIps[i].id
+      }
+    ]
+  }
+}
+
+output natGatewayId string = natGateway.id
+`,
+
   'modules/network/vnet.bicep': `@description('Azure region for all resources')
 param location string
 
@@ -1366,6 +1421,9 @@ param servicesSubnetPrefix string
 
 @description('Address prefix for the private endpoints subnet')
 param privateEndpointSubnetPrefix string
+
+@description('Resource ID of the NAT gateway to associate with the AKS subnet (empty = none)')
+param natGatewayId string = ''
 
 var vnetName = 'vnet-\${customerName}-\${environment}'
 var aksNsgName = 'nsg-aks-\${customerName}-\${environment}'
@@ -1531,12 +1589,16 @@ resource vnet 'Microsoft.Network/virtualNetworks@2025-05-01' = {
     subnets: [
       {
         name: 'snet-aks'
-        properties: {
+        properties: union({
           addressPrefix: aksSubnetPrefix
           networkSecurityGroup: {
             id: aksNsg.id
           }
-        }
+        }, !empty(natGatewayId) ? {
+          natGateway: {
+            id: natGatewayId
+          }
+        } : {})
       }
       {
         name: 'snet-services'
@@ -3008,7 +3070,7 @@ function renderStep3() {
   return '<h2 class="text-xl font-bold text-gray-800 mb-1">Step 3: Networking</h2>' +
     '<p class="text-sm text-gray-500 mb-6">Configure VNet, subnets, and cluster networking parameters.</p>' +
 
-    infoPanel('Network plugin: Azure CNI Overlay (Cilium dataplane). Network policy: Cilium. Outbound: managed NAT Gateway. These are hardcoded in the Bicep modules.') +
+    infoPanel('Network plugin: Azure CNI Overlay (Cilium dataplane). Network policy: Cilium. Outbound: user-assigned NAT Gateway. These are hardcoded in the Bicep modules.') +
     '<div class="mb-6"></div>' +
 
     fieldRow('VNet Address Prefix',
@@ -3894,7 +3956,7 @@ function generateDeploymentGuide(s) {
   // Breaking-change notice (v1.3 defaults)
   lines.push('## Important: Cluster Recreation Required for Existing Deployments');
   lines.push('');
-  lines.push('This generated Bicep uses Cilium dataplane (Azure CNI Overlay) and managed NAT Gateway outbound.');
+  lines.push('This generated Bicep uses Cilium dataplane (Azure CNI Overlay) and user-assigned NAT Gateway outbound.');
   lines.push('These are **create-time** properties on AKS — you cannot switch an existing cluster to them via `az aks update`.');
   lines.push('If you are re-deploying over an existing cluster that used Azure CNI classic + Load Balancer outbound, the deployment will fail.');
   lines.push('');
@@ -3906,8 +3968,8 @@ function generateDeploymentGuide(s) {
   lines.push("- `networkPluginMode: 'overlay'` → remove");
   lines.push("- `networkDataplane: 'cilium'` → remove");
   lines.push("- `networkPolicy: 'cilium'` → `'azure'`");
-  lines.push("- `outboundType: 'managedNATGateway'` → `'loadBalancer'`");
-  lines.push('- remove the `natGatewayProfile` block');
+  lines.push("- `outboundType: 'userAssignedNATGateway'` → `'loadBalancer'`");
+  lines.push('- remove the NAT gateway module and VNet natGatewayId param');
   lines.push('');
 
   // Prerequisites
