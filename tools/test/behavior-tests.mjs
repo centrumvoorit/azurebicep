@@ -686,20 +686,29 @@ console.log('28. Manual-only copy stays aligned across UI and guide');
 }
 
 // ----------------------------------------------------------
-// 29. Bicep-native-only selection omits post-deploy UI
+// 29. Bicep-native-only selection omits post-deploy UI and install commands
 // ----------------------------------------------------------
-console.log('29. Bicep-native-only selection omits post-deploy UI');
+console.log('29. Bicep-native-only selection omits post-deploy UI and install commands');
 {
   const dom = createDom();
   const T = dom.window.__TEST__;
 
   T.initState('dev');
-  T.setValNow('ecosystemTools', { 'azure-policy': true });
+  T.setValNow('ecosystemTools', { 'azure-policy': true, 'csi-secret-store': true });
 
   const panel = T.renderDeployGuidePanel(T.getFlatState());
 
   assert(!panel.includes('chmod +x post-deploy-tools.sh'), 'Bicep-native-only should not show post-deploy script');
-  assert(panel.includes('Azure Policy'), 'Bicep-native tool card should still render');
+  assert(!panel.includes('--addons azure-policy'), 'Bicep-native-only should not show azure-policy install command in UI');
+  assert(!panel.includes('--addons azure-keyvault'), 'Bicep-native-only should not show CSI install command in UI');
+  assert(!panel.includes('Install commands for selected tools'), 'Bicep-native-only should not show install wording');
+  assert(panel.includes('Already Deployed via Bicep'), 'Bicep-native section should appear in UI');
+  assert(panel.includes('Azure Policy'), 'Azure Policy should appear in Bicep-native summary');
+
+  // Step 6 should show "deployed via Bicep" instead of install commands
+  const step6 = T.renderStep6();
+  assert(step6.includes('Already deployed via Bicep'), 'Step 6 should show Bicep-native note for azure-policy');
+  assert(!step6.includes('az aks enable-addons'), 'Step 6 should not show install commands for Bicep-native tools');
 
   dom.window.close();
 }
@@ -721,6 +730,43 @@ console.log('30. Automated-only selection keeps install wording');
   assert(panel.includes('install selected ecosystem tools'), 'Step 7 should keep install wording for automated-only');
   assert(!panel.includes('starter commands'), 'Step 7 should not mention starter commands for automated-only');
   assert(guide.includes('installs each selected tool automatically'), 'Guide should keep automated-only wording');
+
+  dom.window.close();
+}
+
+// ----------------------------------------------------------
+// 31. Mixed mode UI distinguishes automated and manual cards
+// ----------------------------------------------------------
+console.log('31. Mixed mode UI distinguishes automated and manual cards');
+{
+  const dom = createDom();
+  const T = dom.window.__TEST__;
+
+  T.initState('dev');
+  T.setValNow('ecosystemTools', { nginx: true, linkerd: true });
+
+  const panel = T.renderDeployGuidePanel(T.getFlatState());
+
+  assert(panel.includes('automatable tools'), 'Mixed mode card section should mention automatable tools');
+  assert(panel.includes('Manual tools show starter commands'), 'Mixed mode card section should mention manual starter commands');
+  assert(!panel.includes('Install commands for selected tools. Run after cluster is ready'), 'Mixed mode should NOT use automated-only wording');
+  assert(panel.includes('manual'), 'Mixed mode should badge manual tools');
+
+  dom.window.close();
+}
+
+// ----------------------------------------------------------
+// 32. Deploy script includes Microsoft.Authorization provider
+// ----------------------------------------------------------
+console.log('32. Deploy script includes Microsoft.Authorization provider');
+{
+  const dom = createDom();
+  const T = dom.window.__TEST__;
+
+  const script = T.generateDeployScript({
+    customerName: 'testco', environment: 'dev', location: 'westeurope',
+  });
+  assert(script.includes('Microsoft.Authorization'), 'Deploy script should register Microsoft.Authorization provider');
 
   dom.window.close();
 }
