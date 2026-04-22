@@ -106,6 +106,17 @@ suppression:
     - aks-contoso-acc
     - aks-contoso-prod
 
+  Azure.AKS.EphemeralOSDisk:
+    # Default VM sizes (Dsv5, Esv5) have no local cache/temp disk and do not
+    # support Ephemeral OS disks. Managed is the correct choice for these
+    # SKUs. The configurator enforces this at generation time.
+    - aks-citest-dev
+    - aks-citest-acc
+    - aks-citest-prod
+    - aks-contoso-dev
+    - aks-contoso-acc
+    - aks-contoso-prod
+
   # Rules that genuinely apply but are environment-gated — dev runs lean;
   # acc/prod satisfy these rules via Bicep properties emitted conditionally
   # on environment.
