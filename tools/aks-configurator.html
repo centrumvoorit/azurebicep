@@ -1990,7 +1990,7 @@ function initState(env) {
     var val = defaults[f];
     if (val === undefined) {
       if (f === 'customerName') val = '';
-      else if (f === 'adminGroupObjectIds') val = ['11111111-1111-1111-1111-111111111111'];
+      else if (f === 'adminGroupObjectIds') val = [''];
       else if (f === 'customTags') val = [];
       else if (f === 'additionalRoleAssignments') val = [];
       else if (f === 'apiServerAuthorizedIPs') val = [];
@@ -2149,13 +2149,16 @@ function validateStep(stepNum) {
       result.errors.push('At least one Admin Group Object ID is required.');
     } else {
       var guidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      var placeholderGuid = '00000000-0000-0000-0000-000000000000';
+      var placeholderGuids = [
+        '00000000-0000-0000-0000-000000000000',
+        '11111111-1111-1111-1111-111111111111'
+      ];
       for (var i = 0; i < nonEmpty.length; i++) {
         var trimmed = nonEmpty[i].trim();
         if (!guidRe.test(trimmed)) {
           result.errors.push('Admin Group Object ID "' + escapeHtml(nonEmpty[i]) + '" is not a valid GUID (expected format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).');
-        } else if (trimmed.toLowerCase() === placeholderGuid) {
-          result.errors.push('Admin Group Object ID "' + placeholderGuid + '" is a placeholder — combined with disableLocalAccounts: true this causes a silent cluster lockout on deploy (ARM succeeds, nobody can log in). Replace with a real Azure AD group Object ID.');
+        } else if (placeholderGuids.indexOf(trimmed.toLowerCase()) !== -1) {
+          result.errors.push('Admin Group Object ID "' + escapeHtml(trimmed) + '" is a placeholder — combined with disableLocalAccounts: true this causes a silent cluster lockout on deploy (ARM succeeds, nobody can log in). Replace with a real Azure AD group Object ID.');
         }
       }
     }
@@ -2834,13 +2837,13 @@ function renderStep2() {
   return '<h2 class="text-xl font-bold text-gray-800 mb-1">Step 2: Access &amp; Governance</h2>' +
     '<p class="text-sm text-gray-500 mb-6">Configure cluster admin groups, resource tags, and additional RBAC assignments.</p>' +
 
-    infoPanel('Azure RBAC is enabled. Local accounts are disabled. Workload Identity and OIDC issuer are enabled by default.') +
+    infoPanel('Azure RBAC is enabled. Local accounts are disabled. You must enter a real Entra ID group Object ID below &mdash; placeholder GUIDs are blocked. Find it via: Azure Portal &rarr; Entra ID &rarr; Groups &rarr; your group &rarr; Object ID.') +
     '<div class="mb-6"></div>' +
 
     fieldRow('Admin Group Object IDs',
       adminGroupField,
       'params',
-      'Azure AD group object IDs granted cluster-admin access. GUID format required (00000000-0000-0000-0000-000000000000). At least one required.') +
+      'Entra ID group Object IDs granted cluster-admin access. Must be a real GUID &mdash; placeholder values are blocked to prevent cluster lockout. At least one required.') +
 
     '<h3 class="text-base font-semibold text-gray-700 mb-3 mt-6">Required Tags</h3>' +
 
@@ -4211,20 +4214,17 @@ function autoRestore() {
       var n = parseInt(savedStep, 10);
       if (n >= 1 && n <= STEPS.length) currentStep = n;
     }
-    // Soft migration: earlier versions shipped with the all-zeros GUID as the
-    // default in adminGroupObjectIds. That value is now rejected by the
-    // validator (silent-lockout guard), so a returning user would open the
-    // wizard to a red error without having made any change. Rewrite in-place
-    // to the v1.4 example GUID so Step 2 is clean on load.
+    // Soft migration: earlier versions shipped with placeholder GUIDs.
+    // Clear them so the user is forced to enter a real Entra ID group GUID.
     var adminState = state.adminGroupObjectIds;
     if (adminState && Array.isArray(adminState.value)) {
-      var zeroGuid = '00000000-0000-0000-0000-000000000000';
-      var onlyZerosOrEmpty = adminState.value.length === 0 || adminState.value.every(function(v) {
+      var placeholders = ['00000000-0000-0000-0000-000000000000', '11111111-1111-1111-1111-111111111111'];
+      var onlyPlaceholdersOrEmpty = adminState.value.length === 0 || adminState.value.every(function(v) {
         var t = (v || '').trim().toLowerCase();
-        return t === '' || t === zeroGuid;
+        return t === '' || placeholders.indexOf(t) !== -1;
       });
-      if (onlyZerosOrEmpty) {
-        adminState.value = ['11111111-1111-1111-1111-111111111111'];
+      if (onlyPlaceholdersOrEmpty) {
+        adminState.value = [''];
         adminState._edited = false;
         // Persist the migrated value so the next auto-save doesn't restore
         // the old placeholder.
