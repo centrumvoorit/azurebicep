@@ -3154,6 +3154,7 @@ function renderStep4() {
   var userMax = getVal('userNodeMaxCount') !== undefined ? getVal('userNodeMaxCount') : 5;
 
   var osDisk = getVal('osDiskSizeGB') !== undefined ? getVal('osDiskSizeGB') : 128;
+  var osDiskType = getVal('osDiskType') || 'Ephemeral';
   var zones = getVal('availabilityZones') || [];
   var upgradeChannel = getVal('upgradeChannel') || 'patch';
   var maxPods = getVal('maxPodsPerNode') !== undefined ? getVal('maxPodsPerNode') : 110;
@@ -3272,6 +3273,14 @@ function renderStep4() {
     // Shared Settings
     '<div class="mb-6">' +
       '<h3 class="text-base font-semibold text-gray-700 mb-4">Shared Settings</h3>' +
+
+      fieldRow('OS Disk Type',
+        '<select onchange="setVal(\'osDiskType\', this.value)" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500">' +
+          '<option value="Ephemeral"' + (osDiskType === 'Ephemeral' ? ' selected' : '') + '>Ephemeral</option>' +
+          '<option value="Managed"' + (osDiskType === 'Managed' ? ' selected' : '') + '>Managed</option>' +
+        '</select>',
+        'params',
+        'Ephemeral uses the VM cache disk (faster, no storage cost, but limited by VM cache size). Managed uses a separate managed disk. Use Managed for small VMs like Standard_D2s_v5.') +
 
       fieldRow('OS Disk Size (GB)',
         '<div class="flex items-center gap-4">' +
